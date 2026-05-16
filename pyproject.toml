@@ -1,0 +1,22 @@
+[project]
+name = "fastapi-chunking"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.13"
+dependencies = [
+    "asyncpg>=0.31.0",
+    "dashscope>=1.25.14",
+    "fastapi>=0.135.1",
+    "langchain>=1.2.12",
+    "langchain-community>=0.4.1",
+    "langchain-ollama>=1.0.1",
+    "langchain-postgres>=0.0.17",
+    "psycopg[binary,pool]>=3.3.3",
+    "pypdf>=6.8.0",
+    "python-multipart>=0.0.22",
+    "pyyaml>=6.0.3",
+    "recursivecharactertextsplitter>=0.1.0",
+    "sqlalchemy>=2.0.48",
+    "streamlit>=1.55.0",
+    "uvicorn>=0.41.0",
+]
