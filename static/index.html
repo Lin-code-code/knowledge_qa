@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>知识库问答系统</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <div class="app-container">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <div class="logo-icon">📚</div>
+          <div class="logo-text">KnowledgeAI</div>
+        </div>
+        <button class="new-chat-btn" onclick="startNewChat()">
+          <span>+</span>
+          <span>新建对话</span>
+        </button>
+      </div>
+      
+      <div class="chat-history" id="chatHistory"></div>
+      
+      <div class="sidebar-footer">
+        <button class="settings-btn">
+          <span>⚙️</span>
+          <span>设置</span>
+        </button>
+      </div>
+    </aside>
+
+    <main class="main-chat">
+      <header class="chat-header">
+        <h1 class="chat-title" id="chatTitle">新对话</h1>
+        <div class="chat-status">
+          <div class="status-dot"></div>
+          <span>在线</span>
+        </div>
+      </header>
+
+      <div class="messages-container" id="messagesContainer">
+        <div class="welcome-screen" id="welcomeScreen">
+          <div class="welcome-icon">🤖</div>
+          <h2 class="welcome-title">知识库智能问答</h2>
+          <p class="welcome-subtitle">基于您的知识库内容，提供精准的AI问答服务。选择以下示例问题开始，或直接输入您的问题。</p>
+          
+          <div class="quick-actions">
+            <div class="quick-action-card" onclick="sendQuickQuestion('请介绍知识库的主要内容')">
+              <div class="quick-action-icon">💡</div>
+              <div class="quick-action-title">知识库概览</div>
+              <div class="quick-action-desc">了解知识库的主要内容</div>
+            </div>
+            <div class="quick-action-card" onclick="sendQuickQuestion('如何使用这个问答系统？')">
+              <div class="quick-action-icon">📖</div>
+              <div class="quick-action-title">使用指南</div>
+              <div class="quick-action-desc">学习系统的使用方法</div>
+            </div>
+            <div class="quick-action-card" onclick="sendQuickQuestion('支持哪些类型的文件？')">
+              <div class="quick-action-icon">📄</div>
+              <div class="quick-action-title">格式支持</div>
+              <div class="quick-action-desc">查看支持的文件格式</div>
+            </div>
+            <div class="quick-action-card" onclick="sendQuickQuestion('数据来源是什么？')">
+              <div class="quick-action-icon">🔍</div>
+              <div class="quick-action-title">数据来源</div>
+              <div class="quick-action-desc">了解知识库的数据来源</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="input-container">
+        <div class="input-wrapper">
+          <div class="input-box">
+            <textarea 
+              id="messageInput" 
+              placeholder="输入您的问题..." 
+              rows="1"
+              onkeydown="handleKeyDown(event)"
+              oninput="autoResize(this)"
+            ></textarea>
+            <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M22 2L11 13"></path>
+                <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+              </svg>
+            </button>
+          </div>
+          <div class="input-hint">按 Enter 发送，Shift + Enter 换行</div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <div class="modal-overlay" id="settingsModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h2 class="modal-title">设置</h2>
+        <button class="modal-close" id="modalClose">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18"></path>
+            <path d="M6 6L18 18"></path>
+          </svg>
+        </button>
+      </div>
+      
+      <div class="modal-section">
+        <div class="section-label">主题选择</div>
+        <div class="theme-grid">
+          <div class="theme-option" data-theme="dark">
+            <div class="theme-preview dark">🌙</div>
+            <div class="theme-name">暗夜黑</div>
+          </div>
+          <div class="theme-option" data-theme="light">
+            <div class="theme-preview light">☀️</div>
+            <div class="theme-name">明亮白</div>
+          </div>
+          <div class="theme-option" data-theme="ocean">
+            <div class="theme-preview ocean">🌊</div>
+            <div class="theme-name">深海蓝</div>
+          </div>
+          <div class="theme-option" data-theme="forest">
+            <div class="theme-preview forest">🌲</div>
+            <div class="theme-name">森林绿</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
