@@ -3,9 +3,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import Optional
 from pydantic import BaseModel
 
-from app.db.engine import get_db
-from app.db.message_store import AsyncMessageStore
-from app.chain import invoke_chain, get_sources
+from history.db.engine import get_db
+from history.db.message_store import AsyncMessageStore
+from history.chain import invoke_chain, get_sources
 from schemas.chat import (
     ChatRequest, ChatResponse, ChatDeleteResponse,
     ConversationCreateRequest, ConversationCreateResponse,

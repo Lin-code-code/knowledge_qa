@@ -14,7 +14,7 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    from app.db.engine import close_db
+    from history.db.engine import close_db
     await close_db()
 
 

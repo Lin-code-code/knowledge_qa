@@ -2,7 +2,7 @@ from sqlalchemy import select, update, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from typing import List
-from app.models import Conversation, Message
+from history.models import Conversation, Message
 from datetime import datetime, timezone
 import uuid
 from utils.path_tool import get_abs_path
