@@ -3,14 +3,19 @@ const state = {
   messages: [],
   chatHistory: [],
   isLoading: false,
-  currentTheme: 'dark'
+  currentTheme: 'dark',
+  currentPage: 'chat',
+  uploadedFiles: []
 };
 
 document.addEventListener('DOMContentLoaded', () => {
   loadTheme();
   loadChatHistory();
+  loadUploadedFiles();
   document.getElementById('messageInput').focus();
   setupSettingsModal();
+  setupUploadZone();
+  setupNavigation();
 });
 
 function loadTheme() {
@@ -58,17 +63,261 @@ function setupSettingsModal() {
   });
 }
 
+function setupNavigation() {
+  const navBtns = document.querySelectorAll('.nav-btn');
+  navBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const page = btn.dataset.page;
+      switchPage(page);
+      
+      navBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+}
+
+function switchPage(page) {
+  state.currentPage = page;
+  
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.getElementById(`${page}Page`).classList.add('active');
+  
+  const titles = {
+    chat: '新对话',
+    knowledge: '知识库管理'
+  };
+  document.getElementById('headerTitle').textContent = titles[page] || '新对话';
+}
+
+function setupUploadZone() {
+  const zone = document.getElementById('uploadZone');
+  const fileInput = document.getElementById('fileInput');
+  const uploadBtn = document.getElementById('uploadBtn');
+
+  zone.addEventListener('click', () => {
+    fileInput.click();
+  });
+
+  zone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    zone.classList.add('drag-over');
+  });
+
+  zone.addEventListener('dragleave', () => {
+    zone.classList.remove('drag-over');
+  });
+
+  zone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('drag-over');
+    
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      handleFileUpload(files[0]);
+    }
+  });
+
+  fileInput.addEventListener('change', (e) => {
+    if (e.target.files.length > 0) {
+      handleFileUpload(e.target.files[0]);
+    }
+  });
+}
+
+async function handleFileUpload(file) {
+  const progress = document.getElementById('uploadProgress');
+  const progressFill = document.getElementById('progressFill');
+  const progressFilename = document.getElementById('progressFilename');
+  const progressPercent = document.getElementById('progressPercent');
+  const progressMessage = document.getElementById('progressMessage');
+  const uploadBtn = document.getElementById('uploadBtn');
+
+  const allowedTypes = ['txt', 'pdf'];
+  const extension = file.name.split('.').pop().toLowerCase();
+  
+  if (!allowedTypes.includes(extension)) {
+    showNotification(`不支持的文件格式，仅支持 ${allowedTypes.join(', ')}`, 'error');
+    return;
+  }
+
+  progress.classList.add('active');
+  progressFilename.textContent = file.name;
+  progressPercent.textContent = '0%';
+  progressMessage.textContent = '准备上传...';
+  uploadBtn.disabled = true;
+
+  const formData = new FormData();
+  formData.append('file', file);
+
+  try {
+    progressFill.style.width = '30%';
+    progressPercent.textContent = '30%';
+    progressMessage.textContent = '上传文件中...';
+
+    const response = await fetch('/api/files/upload', {
+      method: 'POST',
+      body: formData
+    });
+
+    progressFill.style.width = '70%';
+    progressPercent.textContent = '70%';
+    progressMessage.textContent = '处理文件中...';
+
+    if (response.ok) {
+      const data = await response.json();
+      
+      progressFill.style.width = '100%';
+      progressPercent.textContent = '100%';
+      progressMessage.textContent = data.message;
+
+      const fileInfo = {
+        id: Date.now().toString(),
+        name: file.name,
+        size: formatFileSize(file.size),
+        chunks: data.chunks || 0,
+        status: 'success',
+        uploadTime: new Date().toLocaleString('zh-CN')
+      };
+
+      state.uploadedFiles.unshift(fileInfo);
+      saveUploadedFiles();
+      renderFileList();
+
+      showNotification(data.message, 'success');
+
+      setTimeout(() => {
+        progress.classList.remove('active');
+      }, 2000);
+    } else {
+      const error = await response.json();
+      throw new Error(error.detail || '上传失败');
+    }
+  } catch (error) {
+    progressMessage.textContent = `错误：${error.message}`;
+    progressFill.style.background = 'var(--accent-red)';
+    showNotification(error.message, 'error');
+  } finally {
+    uploadBtn.disabled = false;
+    document.getElementById('fileInput').value = '';
+  }
+}
+
+function formatFileSize(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+function loadUploadedFiles() {
+  const saved = localStorage.getItem('uploadedFiles');
+  if (saved) {
+    state.uploadedFiles = JSON.parse(saved);
+  }
+  renderFileList();
+}
+
+function saveUploadedFiles() {
+  localStorage.setItem('uploadedFiles', JSON.stringify(state.uploadedFiles));
+}
+
+function renderFileList() {
+  const container = document.getElementById('fileListContainer');
+  
+  if (state.uploadedFiles.length === 0) {
+    container.innerHTML = `
+      <div class="file-list-empty">
+        <div style="font-size: 48px; margin-bottom: 16px;">📂</div>
+        <div>暂无上传文件</div>
+        <div style="font-size: 12px; margin-top: 8px;">上传 TXT 或 PDF 文件开始构建知识库</div>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = state.uploadedFiles.map(file => `
+    <div class="file-item">
+      <div class="file-name">
+        <span class="file-icon">${getFileIcon(file.name)}</span>
+        <span>${file.name}</span>
+      </div>
+      <div class="file-size">${file.size}</div>
+      <div class="file-chunks">${file.chunks} 个片段</div>
+      <div class="file-actions">
+        <button class="file-action-btn delete" onclick="deleteFile('${file.id}')" title="删除">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M3 6h18"></path>
+            <path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
+            <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function getFileIcon(filename) {
+  const ext = filename.split('.').pop().toLowerCase();
+  const icons = {
+    pdf: '📄',
+    txt: '📝',
+    md: '📋',
+    doc: '📃',
+    docx: '📃'
+  };
+  return icons[ext] || '📄';
+}
+
+function deleteFile(fileId) {
+  if (!confirm('确定要删除这个文件吗？')) return;
+  
+  state.uploadedFiles = state.uploadedFiles.filter(f => f.id !== fileId);
+  saveUploadedFiles();
+  renderFileList();
+  showNotification('文件已删除', 'success');
+}
+
+function showNotification(message, type = 'info') {
+  const notification = document.createElement('div');
+  notification.className = `notification ${type}`;
+  notification.style.cssText = `
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    padding: 16px 24px;
+    background: ${type === 'success' ? 'var(--accent-green)' : type === 'error' ? 'var(--accent-red)' : 'var(--accent-blue)'};
+    color: white;
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-lg);
+    z-index: 2000;
+    animation: slideIn 0.3s ease-out;
+    font-size: 14px;
+  `;
+  notification.textContent = message;
+  
+  document.body.appendChild(notification);
+  
+  setTimeout(() => {
+    notification.style.animation = 'slideOut 0.3s ease-out';
+    setTimeout(() => notification.remove(), 300);
+  }, 3000);
+}
+
 async function loadChatHistory() {
   const container = document.getElementById('chatHistory');
   const history = JSON.parse(localStorage.getItem('chatHistory') || '[]');
   state.chatHistory = history;
   
-  container.innerHTML = history.map(chat => `
-    <div class="chat-history-item ${chat.id === state.currentChatId ? 'active' : ''}" onclick="loadChat('${chat.id}')">
-      <span class="icon">💬</span>
-      <span>${chat.title}</span>
-    </div>
-  `).join('');
+  container.innerHTML = `
+    <div class="chat-history-title">最近对话</div>
+    ${history.map(chat => `
+      <div class="chat-history-item ${chat.id === state.currentChatId ? 'active' : ''}" onclick="loadChat('${chat.id}')">
+        <span class="icon">💬</span>
+        <span>${chat.title}</span>
+      </div>
+    `).join('')}
+  `;
 }
 
 function saveChatHistory() {
@@ -80,7 +329,7 @@ function loadChat(chatId) {
   const chat = state.chatHistory.find(c => c.id === chatId);
   if (chat) {
     state.messages = chat.messages || [];
-    document.getElementById('chatTitle').textContent = chat.title;
+    document.getElementById('headerTitle').textContent = chat.title;
     renderMessages();
   }
   loadChatHistory();
@@ -89,7 +338,7 @@ function loadChat(chatId) {
 function startNewChat() {
   state.currentChatId = null;
   state.messages = [];
-  document.getElementById('chatTitle').textContent = '新对话';
+  document.getElementById('headerTitle').textContent = '新对话';
   document.getElementById('messagesContainer').innerHTML = `
     <div class="welcome-screen" id="welcomeScreen">
       <div class="welcome-icon">🤖</div>
@@ -180,7 +429,7 @@ async function sendMessage() {
       if (data.chatId && !state.currentChatId) {
         state.currentChatId = data.chatId;
         const title = message.substring(0, 20) + (message.length > 20 ? '...' : '');
-        document.getElementById('chatTitle').textContent = title;
+        document.getElementById('headerTitle').textContent = title;
         
         state.chatHistory.unshift({
           id: data.chatId,

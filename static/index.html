@@ -7,6 +7,16 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Noto+Sans+SC:wght@300;400;500;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/css/style.css">
+  <style>
+    @keyframes slideIn {
+      from { transform: translateX(100%); opacity: 0; }
+      to { transform: translateX(0); opacity: 1; }
+    }
+    @keyframes slideOut {
+      from { transform: translateX(0); opacity: 1; }
+      to { transform: translateX(100%); opacity: 0; }
+    }
+  </style>
 </head>
 <body>
   <div class="app-container">
@@ -16,10 +26,16 @@
           <div class="logo-icon">📚</div>
           <div class="logo-text">KnowledgeAI</div>
         </div>
-        <button class="new-chat-btn" onclick="startNewChat()">
-          <span>+</span>
-          <span>新建对话</span>
-        </button>
+        <div class="sidebar-nav">
+          <button class="nav-btn active" data-page="chat">
+            <span>💬</span>
+            <span>智能问答</span>
+          </button>
+          <button class="nav-btn" data-page="knowledge">
+            <span>📂</span>
+            <span>知识库管理</span>
+          </button>
+        </div>
       </div>
       
       <div class="chat-history" id="chatHistory"></div>
@@ -32,64 +48,120 @@
       </div>
     </aside>
 
-    <main class="main-chat">
-      <header class="chat-header">
-        <h1 class="chat-title" id="chatTitle">新对话</h1>
-        <div class="chat-status">
+    <main class="main-content">
+      <header class="main-header">
+        <h1 class="header-title" id="headerTitle">新对话</h1>
+        <div class="header-status">
           <div class="status-dot"></div>
           <span>在线</span>
         </div>
       </header>
 
-      <div class="messages-container" id="messagesContainer">
-        <div class="welcome-screen" id="welcomeScreen">
-          <div class="welcome-icon">🤖</div>
-          <h2 class="welcome-title">知识库智能问答</h2>
-          <p class="welcome-subtitle">基于您的知识库内容，提供精准的AI问答服务。选择以下示例问题开始，或直接输入您的问题。</p>
-          
-          <div class="quick-actions">
-            <div class="quick-action-card" onclick="sendQuickQuestion('请介绍知识库的主要内容')">
-              <div class="quick-action-icon">💡</div>
-              <div class="quick-action-title">知识库概览</div>
-              <div class="quick-action-desc">了解知识库的主要内容</div>
+      <div class="page-container">
+        <!-- Chat Page -->
+        <div class="page active" id="chatPage">
+          <div class="messages-container" id="messagesContainer">
+            <div class="welcome-screen" id="welcomeScreen">
+              <div class="welcome-icon">🤖</div>
+              <h2 class="welcome-title">知识库智能问答</h2>
+              <p class="welcome-subtitle">基于您的知识库内容，提供精准的AI问答服务。选择以下示例问题开始，或直接输入您的问题。</p>
+              
+              <div class="quick-actions">
+                <div class="quick-action-card" onclick="sendQuickQuestion('请介绍知识库的主要内容')">
+                  <div class="quick-action-icon">💡</div>
+                  <div class="quick-action-title">知识库概览</div>
+                  <div class="quick-action-desc">了解知识库的主要内容</div>
+                </div>
+                <div class="quick-action-card" onclick="sendQuickQuestion('如何使用这个问答系统？')">
+                  <div class="quick-action-icon">📖</div>
+                  <div class="quick-action-title">使用指南</div>
+                  <div class="quick-action-desc">学习系统的使用方法</div>
+                </div>
+                <div class="quick-action-card" onclick="sendQuickQuestion('支持哪些类型的文件？')">
+                  <div class="quick-action-icon">📄</div>
+                  <div class="quick-action-title">格式支持</div>
+                  <div class="quick-action-desc">查看支持的文件格式</div>
+                </div>
+                <div class="quick-action-card" onclick="sendQuickQuestion('数据来源是什么？')">
+                  <div class="quick-action-icon">🔍</div>
+                  <div class="quick-action-title">数据来源</div>
+                  <div class="quick-action-desc">了解知识库的数据来源</div>
+                </div>
+              </div>
             </div>
-            <div class="quick-action-card" onclick="sendQuickQuestion('如何使用这个问答系统？')">
-              <div class="quick-action-icon">📖</div>
-              <div class="quick-action-title">使用指南</div>
-              <div class="quick-action-desc">学习系统的使用方法</div>
-            </div>
-            <div class="quick-action-card" onclick="sendQuickQuestion('支持哪些类型的文件？')">
-              <div class="quick-action-icon">📄</div>
-              <div class="quick-action-title">格式支持</div>
-              <div class="quick-action-desc">查看支持的文件格式</div>
-            </div>
-            <div class="quick-action-card" onclick="sendQuickQuestion('数据来源是什么？')">
-              <div class="quick-action-icon">🔍</div>
-              <div class="quick-action-title">数据来源</div>
-              <div class="quick-action-desc">了解知识库的数据来源</div>
+          </div>
+
+          <div class="input-container">
+            <div class="input-wrapper">
+              <div class="input-box">
+                <textarea 
+                  id="messageInput" 
+                  placeholder="输入您的问题..." 
+                  rows="1"
+                  onkeydown="handleKeyDown(event)"
+                  oninput="autoResize(this)"
+                ></textarea>
+                <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M22 2L11 13"></path>
+                    <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
+                  </svg>
+                </button>
+              </div>
+              <div class="input-hint">按 Enter 发送，Shift + Enter 换行</div>
             </div>
           </div>
         </div>
-      </div>
 
-      <div class="input-container">
-        <div class="input-wrapper">
-          <div class="input-box">
-            <textarea 
-              id="messageInput" 
-              placeholder="输入您的问题..." 
-              rows="1"
-              onkeydown="handleKeyDown(event)"
-              oninput="autoResize(this)"
-            ></textarea>
-            <button class="send-btn" id="sendBtn" onclick="sendMessage()">
-              <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 2L11 13"></path>
-                <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
-              </svg>
-            </button>
+        <!-- Knowledge Base Page -->
+        <div class="page" id="knowledgePage">
+          <div class="kb-page">
+            <div class="kb-container">
+              <div class="kb-section">
+                <div class="kb-section-title">
+                  <span>📤</span>
+                  <span>上传文件</span>
+                </div>
+                
+                <div class="upload-zone" id="uploadZone">
+                  <div class="upload-icon">📁</div>
+                  <div class="upload-title">拖拽文件到此处，或点击上传</div>
+                  <div class="upload-subtitle">支持批量上传，单个文件不超过 50MB</div>
+                  <button class="upload-btn" id="uploadBtn">选择文件</button>
+                  <div class="file-types">支持格式：TXT、PDF</div>
+                  <input type="file" id="fileInput" accept=".txt,.pdf" style="display: none;">
+                </div>
+
+                <div class="upload-progress" id="uploadProgress">
+                  <div class="progress-header">
+                    <span class="progress-filename" id="progressFilename"></span>
+                    <span class="progress-percent" id="progressPercent">0%</span>
+                  </div>
+                  <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill"></div>
+                  </div>
+                  <div class="progress-message" id="progressMessage"></div>
+                </div>
+              </div>
+
+              <div class="kb-section">
+                <div class="kb-section-title">
+                  <span>📋</span>
+                  <span>已上传文件</span>
+                </div>
+                
+                <div class="file-list">
+                  <div class="file-list-header">
+                    <div>文件名</div>
+                    <div>大小</div>
+                    <div>片段数</div>
+                    <div>操作</div>
+                  </div>
+                  <div id="fileListContainer"></div>
+                </div>
+              </div>
+            </div>
           </div>
-          <div class="input-hint">按 Enter 发送，Shift + Enter 换行</div>
         </div>
       </div>
     </main>
