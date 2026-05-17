@@ -1,59 +1,166 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import Optional
 from pydantic import BaseModel
-from rag.rag_service import RagService
-from schemas.chat import ChatRequest, ChatResponse, ChatDeleteResponse
 
-router = APIRouter(prefix="/api/chat", tags=["Chat"])
+from app.db.engine import get_db
+from app.db.message_store import AsyncMessageStore
+from app.chain import invoke_chain, get_sources
+from schemas.chat import (
+    ChatRequest, ChatResponse, ChatDeleteResponse,
+    ConversationCreateRequest, ConversationCreateResponse,
+    ConversationListResponse, MessageListResponse
+)
+import uuid
 
-# 创建 RAG 服务实例
-rag_service = RagService()
+router = APIRouter(prefix="/api", tags=["Chat"])
 
-@router.delete("/{chat_id}", response_model=ChatDeleteResponse)
-async def delete_chat(chat_id: str):
-    """
-    删除指定对话
-    
-    注意：此接口尚未实现具体逻辑，仅作为接口定义预留。
-    后续将实现从数据库/持久化存储中删除对话记录。
-    """
 
-    raise HTTPException(
-        status_code=501,
-        detail="该功能尚未实现：对话删除接口已定义，待后续开发"
-    )
+@router.get("/conversations", response_model=ConversationListResponse)
+async def list_conversations(
+    user_id: str = "anonymous",
+    db: AsyncSession = Depends(get_db),
+):
+    """获取当前用户的会话列表"""
+    try:
+        store = AsyncMessageStore(db)
+        convs = await store.list_conversations(user_id=user_id)
+        items = []
+        for c in convs:
+            msgs = await store.get_messages(c.id, limit=1)
+            items.append({
+                "conversation_id": str(c.id),
+                "title": c.title,
+                "created_at": c.created_at.isoformat(),
+                "updated_at": c.updated_at.isoformat(),
+                "message_count": 0,
+            })
+        return ConversationListResponse(conversations=items)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取会话列表失败: {str(e)}")
 
-@router.post("/", response_model=ChatResponse)
-async def chat(request: ChatRequest):
-    """
-    知识库问答接口
-    """
+
+@router.get("/chat/{conversation_id}/messages", response_model=MessageListResponse)
+async def get_chat_messages(
+    conversation_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """获取指定会话的消息列表"""
+    try:
+        conv_uuid = uuid.UUID(conversation_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="conversation_id 格式无效")
+
+    try:
+        store = AsyncMessageStore(db)
+        msgs = await store.get_messages(conv_uuid)
+        return MessageListResponse(
+            messages=[{
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at.isoformat(),
+            } for m in msgs],
+            conversation_id=conversation_id,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取消息列表失败: {str(e)}")
+
+
+@router.post("/conversations", response_model=ConversationCreateResponse)
+async def create_conversation(
+    request: ConversationCreateRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """创建新会话"""
+    try:
+        store = AsyncMessageStore(db)
+        conv_id = await store.create_conversation(
+            user_id=request.user_id or "anonymous",
+            title=request.title or "新对话",
+        )
+        return ConversationCreateResponse(
+            conversation_id=str(conv_id),
+            title=request.title or "新对话",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"创建会话失败: {str(e)}")
+
+
+@router.post("/chat/", response_model=ChatResponse)
+async def chat(
+    request: ChatRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """带历史对话的多轮问答接口"""
     try:
         if not request.message or not request.message.strip():
             raise HTTPException(status_code=400, detail="消息不能为空")
-        
-        # 调用 RAG 服务获取答案
-        answer = rag_service.rag_summarize(request.message)
-        
-        # 检索参考文档
-        context_docs = rag_service.retriever_docs(request.message)
-        
-        # 提取来源信息
-        sources = []
-        for i, doc in enumerate(context_docs, 1):
-            source_title = doc.metadata.get('source', f'参考资料{i}')
-            sources.append(source_title)
-        
-        # 生成简单的 chatId（实际项目中应该使用数据库管理会话）
-        import uuid
-        chat_id = request.chatId or str(uuid.uuid4())
-        
+
+        store = AsyncMessageStore(db)
+
+        # 无 chatId 时先创建新会话
+        if not request.chatId:
+            conv_id = await store.create_conversation(
+                user_id="anonymous",
+                title=request.message[:30] + ("..." if len(request.message) > 30 else ""),
+            )
+            conversation_id = str(conv_id)
+        else:
+            conversation_id = request.chatId
+
+        try:
+            conv_uuid = uuid.UUID(conversation_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="conversation_id 格式无效")
+
+        history = await store.get_recent_messages(conv_uuid)
+
+        answer = await invoke_chain(request.message, history)
+
+        sources = get_sources(request.message)
+
+        from langchain_core.messages import HumanMessage, AIMessage
+        await store.add_messages(conv_uuid, [
+            HumanMessage(content=request.message),
+            AIMessage(content=answer),
+        ])
+
         return ChatResponse(
             answer=answer,
             sources=sources,
-            chatId=chat_id
+            chatId=conversation_id,
         )
-        
+
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"问答处理失败: {str(e)}")
+
+
+@router.delete("/chat/{chat_id}", response_model=ChatDeleteResponse)
+async def delete_chat(
+    chat_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """删除指定对话及其所有消息"""
+    try:
+        try:
+            conv_uuid = uuid.UUID(chat_id)
+        except ValueError:
+            raise HTTPException(status_code=400, detail="conversation_id 格式无效")
+
+        store = AsyncMessageStore(db)
+        deleted = await store.delete_conversation(conv_uuid)
+
+        if not deleted:
+            raise HTTPException(status_code=404, detail="对话不存在")
+
+        return ChatDeleteResponse(
+            message="删除成功",
+            chatId=chat_id,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
