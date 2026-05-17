@@ -1,24 +1,8 @@
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
 from rag.rag_service import RagService
-from typing import List, Optional
+from schemas.chat import ChatRequest, ChatResponse
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
-
-# 请求体模型
-class ChatRequest(BaseModel):
-    message: str
-    chatId: Optional[str] = None
-
-# 响应体模型
-class SourceReference(BaseModel):
-    title: str
-    content: str
-
-class ChatResponse(BaseModel):
-    answer: str
-    sources: Optional[List[str]] = []
-    chatId: Optional[str] = None
 
 # 创建 RAG 服务实例
 rag_service = RagService()
