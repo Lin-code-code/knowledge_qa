@@ -50,7 +50,13 @@
 
     <main class="main-content">
       <header class="main-header">
-        <h1 class="header-title" id="headerTitle">新对话</h1>
+        <div class="header-left">
+          <h1 class="header-title" id="headerTitle">新对话</h1>
+          <button class="header-new-chat-btn" onclick="startNewChat()">
+            <span>+</span>
+            <span>新对话</span>
+          </button>
+        </div>
         <div class="header-status">
           <div class="status-dot"></div>
           <span>在线</span>
@@ -206,3 +212,5 @@
   <script src="/static/js/app.js"></script>
 </body>
 </html>
+
+

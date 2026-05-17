@@ -1,11 +1,26 @@
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 from rag.rag_service import RagService
-from schemas.chat import ChatRequest, ChatResponse
+from schemas.chat import ChatRequest, ChatResponse, ChatDeleteResponse
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
 # 创建 RAG 服务实例
 rag_service = RagService()
+
+@router.delete("/{chat_id}", response_model=ChatDeleteResponse)
+async def delete_chat(chat_id: str):
+    """
+    删除指定对话
+    
+    注意：此接口尚未实现具体逻辑，仅作为接口定义预留。
+    后续将实现从数据库/持久化存储中删除对话记录。
+    """
+
+    raise HTTPException(
+        status_code=501,
+        detail="该功能尚未实现：对话删除接口已定义，待后续开发"
+    )
 
 @router.post("/", response_model=ChatResponse)
 async def chat(request: ChatRequest):

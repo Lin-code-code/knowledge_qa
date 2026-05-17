@@ -314,7 +314,8 @@ async function loadChatHistory() {
     ${history.map(chat => `
       <div class="chat-history-item ${chat.id === state.currentChatId ? 'active' : ''}" onclick="loadChat('${chat.id}')">
         <span class="icon">💬</span>
-        <span>${chat.title}</span>
+        <span class="chat-title-text">${chat.title}</span>
+        <button class="chat-history-delete" onclick="deleteChat('${chat.id}', event)" title="删除对话">❌</button>
       </div>
     `).join('')}
   `;
@@ -333,6 +334,74 @@ function loadChat(chatId) {
     renderMessages();
   }
   loadChatHistory();
+}
+
+async function deleteChat(chatId, event) {
+  if (event) {
+    event.stopPropagation();
+  }
+  if (!confirm('确定要删除这个对话吗？')) return;
+
+  try {
+    const response = await fetch(`/api/chat/${chatId}`, {
+      method: 'DELETE'
+    });
+
+    if (!response.ok && response.status !== 501) {
+      const error = await response.json();
+      throw new Error(error.detail || '删除失败');
+    }
+  } catch (error) {
+    if (error.message === 'Failed to fetch') {
+      showNotification('后端接口暂未实现，已本地删除', 'info');
+    } else if (error.message !== '删除失败') {
+      showNotification('后端接口暂未实现，已本地删除', 'info');
+    } else {
+      showNotification(error.message, 'error');
+      return;
+    }
+  }
+
+  state.chatHistory = state.chatHistory.filter(c => c.id !== chatId);
+  saveChatHistory();
+
+  if (state.currentChatId === chatId) {
+    state.currentChatId = null;
+    state.messages = [];
+    document.getElementById('headerTitle').textContent = '新对话';
+    document.getElementById('messagesContainer').innerHTML = `
+      <div class="welcome-screen" id="welcomeScreen">
+        <div class="welcome-icon">🤖</div>
+        <h2 class="welcome-title">知识库智能问答</h2>
+        <p class="welcome-subtitle">基于您的知识库内容，提供精准的AI问答服务。选择以下示例问题开始，或直接输入您的问题。</p>
+        <div class="quick-actions">
+          <div class="quick-action-card" onclick="sendQuickQuestion('请介绍知识库的主要内容')">
+            <div class="quick-action-icon">💡</div>
+            <div class="quick-action-title">知识库概览</div>
+            <div class="quick-action-desc">了解知识库的主要内容</div>
+          </div>
+          <div class="quick-action-card" onclick="sendQuickQuestion('如何使用这个问答系统？')">
+            <div class="quick-action-icon">📖</div>
+            <div class="quick-action-title">使用指南</div>
+            <div class="quick-action-desc">学习系统的使用方法</div>
+          </div>
+          <div class="quick-action-card" onclick="sendQuickQuestion('支持哪些类型的文件？')">
+            <div class="quick-action-icon">📄</div>
+            <div class="quick-action-title">格式支持</div>
+            <div class="quick-action-desc">查看支持的文件格式</div>
+          </div>
+          <div class="quick-action-card" onclick="sendQuickQuestion('数据来源是什么？')">
+            <div class="quick-action-icon">🔍</div>
+            <div class="quick-action-title">数据来源</div>
+            <div class="quick-action-desc">了解知识库的数据来源</div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  loadChatHistory();
+  showNotification('对话已删除', 'success');
 }
 
 function startNewChat() {

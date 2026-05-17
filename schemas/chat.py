@@ -15,3 +15,7 @@ class ChatResponse(BaseModel):
     answer: str
     sources: Optional[List[str]] = []
     chatId: Optional[str] = None
+
+class ChatDeleteResponse(BaseModel):
+    message: str
+    chatId: str
