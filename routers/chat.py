@@ -5,7 +5,8 @@ from pydantic import BaseModel
 
 from history.db.engine import get_db
 from history.db.message_store import AsyncMessageStore
-from history.chain import invoke_chain, get_sources
+from agent.react_agent import ReactAgent
+from rag.rag_service import RagService
 from schemas.chat import (
     ChatRequest, ChatResponse, ChatDeleteResponse,
     ConversationCreateRequest, ConversationCreateResponse,
@@ -115,9 +116,11 @@ async def chat(
 
         history = await store.get_recent_messages(conv_uuid)
 
-        answer = await invoke_chain(request.message, history)
+        agent = ReactAgent()
+        answer = await agent.aexecute(request.message, history)
 
-        sources = get_sources(request.message)
+        rag_service = RagService()
+        sources = rag_service.get_sources(request.message)
 
         from langchain_core.messages import HumanMessage, AIMessage
         await store.add_messages(conv_uuid, [

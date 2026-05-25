@@ -33,6 +33,14 @@ class RagService:
     def retriever_docs(self, query: str) -> list[Document]:
         return self.retriever.invoke(query)
 
+    def get_sources(self, query: str) -> list:
+        docs = self.retriever_docs(query)
+        sources = []
+        for doc in docs:
+            source_title = doc.metadata.get('source', '未知来源')
+            sources.append(source_title)
+        return sources
+
     def rag_summarize(self, query: str) -> str:
         context_docs = self.retriever_docs(query)
 

@@ -25,6 +25,14 @@ class ReactAgent:
             if latest_message.content:
                 yield latest_message.content.strip() + "\n"
 
+    async def aexecute(self, query: str, history: list) -> str:
+        messages = list(history)
+        messages.append({"role": "user", "content": query})
+        
+        input_dict = {"messages": messages}
+        response = await self.agent.ainvoke(input_dict, context={"report": False})
+        return response["messages"][-1].content
+
 
 if __name__ == '__main__':
     agent = ReactAgent()
