@@ -60,6 +60,7 @@
 ### 知识库问答
 
 - 基于向量检索召回相关内容
+- 支持基于 ReactAgent 代理模式进行意图识别和工具调用
 - 使用提示词模板组织回答
 - 支持多轮对话上下文
 - 支持返回会话 ID，便于前端继续追问
@@ -85,7 +86,7 @@
 - **Uvicorn**：ASGI 服务器
 - **SQLAlchemy** + **asyncpg**：异步数据库访问
 - **PostgreSQL + PGVector**：向量存储
-- **LangChain**：RAG 流程编排
+- **LangChain & LangGraph**：Agent编排与大模型调度
 - **LangChain Community / LangChain PGVector / LangChain Ollama**：模型与向量相关能力
 - **DashScope**：部分模型能力
 - **PyYAML**：YAML 配置加载
@@ -100,9 +101,13 @@ FastAPI_chunking/
 ├─ main.py                    # FastAPI 应用入口
 ├─ pyproject.toml             # 项目依赖与构建配置
 ├─ uv.lock                    # uv 锁定文件
+├─ agent/                     # 智能代理组件
+│  ├─ react_agent.py          # ReactAgent 实现
+│  └─ tool/
+│     ├─ agent_tools.py       # Agent 工具(如 rag_summarize, 时间查询等)
+│     └─ middleware.py
 ├─ history/                   # 会话历史相关逻辑
 │  ├─ __init__.py
-│  ├─ chain.py                # 对话链/历史处理
 │  ├─ models.py               # 历史消息相关模型
 │  └─ db/
 │     ├─ __init__.py
@@ -341,10 +346,11 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 
 1. 用户调用 `/api/chat/`
 2. 系统读取最近对话历史
-3. 使用向量检索召回相关知识片段
-4. 将问题和上下文注入提示词模板
-5. 模型生成回答
-6. 把用户消息和模型回答写回会话存储
+3. 将对话历史和最新问题传递给 `ReactAgent`
+4. `ReactAgent` 分析意图，自主决定是否需要使用工具（如调用向量检索服务获取背景知识片段）
+5. Agent 结合系统背景设定、检索获取的文档和用户问题合成最终回答
+6. 接口同时返回所调用的相关知识库片段元数据（Sources）
+7. 把用户消息和模型回答写回会话存储
 
 ---
 
