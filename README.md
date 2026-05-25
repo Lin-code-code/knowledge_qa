@@ -1,4 +1,4 @@
-# FastAPI_chunking
+# RAG智能问答系统
 
 一个基于 **FastAPI + LangChain + PGVector** 的知识库问答项目。
 
