@@ -1,6 +1,7 @@
 from langchain.agents import create_agent
 
 from agent.tool.agent_tools import get_current_time, rag_summarize
+from agent.tool.middleware import monitor_tool, log_before_model
 from model.factory import chat_model
 from utils.prompt_loader import load_system_prompts
 
@@ -10,7 +11,7 @@ class ReactAgent:
             model=chat_model,
             system_prompt=load_system_prompts(),
             tools=[rag_summarize, get_current_time],
-            middleware=[]
+            middleware=[monitor_tool, log_before_model]
         )
 
     def execute_stream(self, query: str):

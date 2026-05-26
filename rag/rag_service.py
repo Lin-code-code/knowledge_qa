@@ -1,18 +1,10 @@
 from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
-from langchain_community.chat_models.tongyi import ChatTongyi
 from langchain_core.prompts import PromptTemplate
 from rag.vector_store import VectorStoreService
-from utils.config_handler import rag_conf
 from utils.prompt_loader import load_rag_prompts
 from utils.load_env import env_conf
-
-
-
-
-
 from model.factory import chat_model
-
 
 # connect_str = f"postgresql+psycopg://{env_conf.USER}:{env_conf.PASSWORD}@{env_conf.HOST}:{env_conf.PORT}/{env_conf.DB}"
 

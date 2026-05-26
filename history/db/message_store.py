@@ -3,15 +3,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
 from typing import List
 from history.models import Conversation, Message
-from datetime import datetime, timezone
 import uuid
-from utils.path_tool import get_abs_path
-import yaml
+from utils.config_handler import db_conf
 
-
-_config_path = get_abs_path("config/database.yml")
-with open(_config_path, "r", encoding="utf-8") as f:
-    db_conf = yaml.load(f, Loader=yaml.FullLoader)
 
 MAX_MESSAGES = db_conf.get("max_messages", 30)
 MAX_TOKENS = db_conf.get("max_tokens", 2000)

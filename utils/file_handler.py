@@ -30,6 +30,12 @@ def get_file_md5_hex(file_path: str):
         return None
 
 def listdir_with_allowed_type(path: str, allowed_type: tuple[str]):
+    """
+    列出目录下所有指定类型的文件
+    :param path: 目录路径
+    :param allowed_type: 允许的文件类型后缀元组，例如(".pdf", ".txt")
+    :return:
+    """
     files = []
 
     if not os.path.isdir(path):

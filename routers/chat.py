@@ -1,8 +1,5 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import Optional
-from pydantic import BaseModel
-
 from history.db.engine import get_db
 from history.db.message_store import AsyncMessageStore
 from agent.react_agent import ReactAgent

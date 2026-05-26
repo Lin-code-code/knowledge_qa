@@ -1,15 +1,14 @@
 import os
-from langchain_community.embeddings import DashScopeEmbeddings
 from langchain_core.documents import Document
 from langchain_postgres import PGVector
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from utils.config_handler import pg_conf, rag_conf
+from utils.config_handler import pg_conf
 from utils.path_tool import get_abs_path
 from utils.file_handler import pdf_loader, txt_loader, listdir_with_allowed_type, get_file_md5_hex
 from utils.logger_handler import logger
 
-from model.factory import embed_model
+from model.factory import embed_model, openai_embed_model
 
 class VectorStoreService:
     def __init__(
@@ -27,8 +26,8 @@ class VectorStoreService:
 
         # 初始化 PGVector
         self.vector_store = PGVector(
-            embeddings=embed_model,
-            collection_name=pg_conf["collection_name"],
+            embeddings=openai_embed_model,
+            collection_name=pg_conf["collection_name_1024"],
             connection=self.conn_str,
             use_jsonb=True,                      # 推荐开启，用于存metadata
         )

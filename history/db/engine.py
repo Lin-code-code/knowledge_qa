@@ -1,12 +1,6 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from typing import AsyncGenerator
-from utils.config_handler import pg_conf
-from utils.path_tool import get_abs_path
-import yaml
-
-_config_path = get_abs_path("config/database.yml")
-with open(_config_path, "r", encoding="utf-8") as f:
-    db_conf = yaml.load(f, Loader=yaml.FullLoader)
+from utils.config_handler import db_conf
 
 ASYNC_DB_URL = (
     f"postgresql+asyncpg://{db_conf['user']}:{db_conf['password']}"

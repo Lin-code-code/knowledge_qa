@@ -5,10 +5,6 @@ class ChatRequest(BaseModel):
     message: str
     chatId: Optional[str] = None
 
-class SourceReference(BaseModel):
-    title: str
-    content: str
-
 class ChatResponse(BaseModel):
     answer: str
     sources: Optional[List[str]] = []
