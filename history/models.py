@@ -38,3 +38,20 @@ class Message(Base):
     __table_args__ = (
         Index("idx_messages_conv_created", "conversation_id", text("created_at DESC")),
     )
+
+
+# 创建一个模型类来记录已经上传的文件信息，避免重复上传，包含文件的id、md5字符串、文件名、文件大小、上传时间等字段
+class UploadedFile(Base):
+    """已上传文件表"""
+    __tablename__ = "uploaded_files"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, server_default=func.gen_random_uuid())
+    filename = Column(String(256), nullable=False)
+    md5_hex = Column(String(32), nullable=False, unique=True)
+    size = Column(BigInteger, nullable=False)
+    uploaded_at = Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_uploaded_files_md5", "md5_hex"),
+    )
+

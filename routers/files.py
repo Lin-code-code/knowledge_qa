@@ -1,8 +1,13 @@
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
 import os, uuid
+
+from history.db.engine import get_db
 from rag.vector_store import VectorStoreService
 from utils.config_handler import pg_conf
 from utils.path_tool import get_abs_path
+
+from utils.file_handler import get_file_md5_hex
+from history.db.files import get_uploaded_file_by_md5, save_uploaded_file_details
 
 router = APIRouter(prefix="/api/files", tags=["Files"])
 
@@ -10,7 +15,8 @@ router = APIRouter(prefix="/api/files", tags=["Files"])
 async def upload_and_split(
         file: UploadFile = File(...),
         chunk_size: int = pg_conf["chunk_size"],
-        chunk_overlap: int = pg_conf["chunk_overlap"]
+        chunk_overlap: int = pg_conf["chunk_overlap"],
+        db = Depends(get_db)
 ):
     filename = file.filename or ""
     if not filename:
@@ -41,19 +47,29 @@ async def upload_and_split(
         with open(temp_path, "wb") as f:
             f.write(file_bytes)
 
-        # 创建向量库服务实例
-        vector_service = VectorStoreService(chunk_size, chunk_overlap)
-        split_documents = vector_service.load_document()
+        file_md5_hex = get_file_md5_hex(temp_path)
+        exist_file = await get_uploaded_file_by_md5(md5_hex=file_md5_hex, db=db)
+        if exist_file is not None:
+            raise HTTPException(status_code=400, detail="文件已存在于向量库中！")
+        else:
+            # 创建向量库服务实例，加载文件并切分存入向量库
+            split_documents = VectorStoreService(chunk_size, chunk_overlap).load_document()
 
+            # 保存上传文件的详情到数据库
+            newfile = await save_uploaded_file_details(
+                filename=saved_filename,
+                md5_hex=file_md5_hex,
+                file_size=file.size // 1024,
+                db=db
+            )
         if split_documents is None:
             return {"message": "文件已存在于向量库中！"}
 
         return {
-
-
             "message": "文件解析、切分并写入向量库成功",
             "filename": filename,
-            "chunks": split_documents
+            "chunks": split_documents,
+            "file_id": newfile.id
         }
     except HTTPException:
         raise

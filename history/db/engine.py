@@ -13,9 +13,10 @@ engine = create_async_engine(
     max_overflow=db_conf.get("async_max_overflow", 10),
     pool_recycle=db_conf.get("pool_recycle", 3600),
     pool_pre_ping=db_conf.get("pool_pre_ping", True),
-    echo=False,
+    echo=True,
 )
 
+# 创建异步会话工厂
 async_session_factory = async_sessionmaker(
     engine,
     class_=AsyncSession,
@@ -23,11 +24,16 @@ async_session_factory = async_sessionmaker(
 )
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
+# 获取异步数据库 session
+async def get_db():
     """FastAPI 依赖注入：获取异步数据库 session"""
     async with async_session_factory() as session:
         try:
             yield session
+            await session.commit()
+        except Exception as e:
+            await session.rollback()
+            raise e
         finally:
             await session.close()
 

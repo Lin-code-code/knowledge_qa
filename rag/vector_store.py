@@ -48,22 +48,6 @@ class VectorStoreService:
         要计算文件的md5做去重
         :return: None
         """
-        def check_md5_hex(md5_for_check: str):
-            if not os.path.exists(get_abs_path(pg_conf["md5_hex_store"])):
-                # 创建文件
-                open(get_abs_path(pg_conf["md5_hex_store"]), "w", encoding="utf-8").close()
-                return False
-            with open(get_abs_path(pg_conf["md5_hex_store"]), "r", encoding="utf-8") as f:
-                for line in f.readlines():
-                    line = line.strip()
-                    if line == md5_for_check:
-                        return True
-                return False
-
-        def save_md5_hex(md5_for_check: str):
-            with open(get_abs_path(pg_conf["md5_hex_store"]), "a", encoding="utf-8") as f:
-                f.write(md5_for_check + "\n")
-
         def get_file_document(file_path: str):
             if file_path.endswith(".pdf"):
                 return pdf_loader(file_path)
@@ -79,11 +63,6 @@ class VectorStoreService:
         )
 
         for path in allowed_files_paths:
-            md5_hex = get_file_md5_hex(path)
-
-            if check_md5_hex(md5_hex):
-                logger.info(f"[文件已存在] {path}")
-                continue
             try:
                 documents: list[Document] = get_file_document(path)
                 if not documents:
@@ -97,8 +76,6 @@ class VectorStoreService:
                     continue
                 # 将内容添加到向量库
                 splited_doc = self.vector_store.add_documents(split_document)
-
-                save_md5_hex(md5_hex)
 
                 logger.info(f"[加载知识库] {path}内容成功")
 
