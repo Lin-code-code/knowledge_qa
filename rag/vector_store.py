@@ -8,7 +8,7 @@ from utils.path_tool import get_abs_path
 from utils.file_handler import pdf_loader, txt_loader, listdir_with_allowed_type, get_file_md5_hex
 from utils.logger_handler import logger
 
-from model.factory import embed_model, openai_embed_model
+from model.factory import openai_embed_model
 
 class VectorStoreService:
     def __init__(

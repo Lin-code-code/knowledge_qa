@@ -7,7 +7,7 @@ from utils.config_handler import pg_conf
 from utils.path_tool import get_abs_path
 
 from utils.file_handler import get_file_md5_hex
-from history.db.files import get_uploaded_file_by_md5, save_uploaded_file_details
+from history.db.files import get_uploaded_file_by_md5, save_uploaded_file_details, get_all_uploaded_files, delete_uploaded_file_by_id
 
 router = APIRouter(prefix="/api/files", tags=["Files"])
 
@@ -57,7 +57,7 @@ async def upload_and_split(
 
             # 保存上传文件的详情到数据库
             newfile = await save_uploaded_file_details(
-                filename=saved_filename,
+                filename=filename,
                 md5_hex=file_md5_hex,
                 file_size=file.size // 1024,
                 db=db
@@ -79,3 +79,25 @@ async def upload_and_split(
         await file.close()
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+@router.get("/list")
+async def list_uploaded_files(db = Depends(get_db)):
+    try:
+        files = await get_all_uploaded_files(db=db)
+        return {"files": files}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取文件列表失败: {str(e)}")
+
+
+@router.delete("/{file_id}")
+async def delete_uploaded_file(file_id: str, db = Depends(get_db)):
+    try:
+        deleted = await delete_uploaded_file_by_id(file_id=file_id, db=db)
+        if not deleted:
+            raise HTTPException(status_code=404, detail="文件记录不存在")
+        return {"message": "文件记录已删除"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除文件记录失败: {str(e)}")

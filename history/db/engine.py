@@ -13,7 +13,7 @@ engine = create_async_engine(
     max_overflow=db_conf.get("async_max_overflow", 10),
     pool_recycle=db_conf.get("pool_recycle", 3600),
     pool_pre_ping=db_conf.get("pool_pre_ping", True),
-    echo=True,
+    echo=False,
 )
 
 # 创建异步会话工厂

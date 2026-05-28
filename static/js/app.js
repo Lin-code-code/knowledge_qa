@@ -72,6 +72,9 @@ function switchPage(page) {
   document.getElementById(`${page}Page`).classList.add('active');
   const titles = { chat: '新对话', knowledge: '知识库管理' };
   document.getElementById('headerTitle').textContent = titles[page] || '新对话';
+  if (page === 'knowledge') {
+    loadUploadedFiles();
+  }
 }
 
 function setupUploadZone() {
@@ -130,16 +133,7 @@ async function handleFileUpload(file) {
       progressFill.style.width = '100%';
       progressPercent.textContent = '100%';
       progressMessage.textContent = data.message;
-      state.uploadedFiles.unshift({
-        id: Date.now().toString(),
-        name: file.name,
-        size: formatFileSize(file.size),
-        chunks: data.chunks || 0,
-        status: 'success',
-        uploadTime: new Date().toLocaleString('zh-CN')
-      });
-      saveUploadedFiles();
-      renderFileList();
+      await loadUploadedFiles();
       showNotification(data.message, 'success');
       setTimeout(() => progress.classList.remove('active'), 2000);
     } else {
@@ -156,22 +150,35 @@ async function handleFileUpload(file) {
   }
 }
 
-function formatFileSize(bytes) {
-  if (bytes === 0) return '0 B';
-  const k = 1024;
-  const sizes = ['B', 'KB', 'MB', 'GB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-}
 
-function loadUploadedFiles() {
-  const saved = localStorage.getItem('uploadedFiles');
-  if (saved) state.uploadedFiles = JSON.parse(saved);
+async function loadUploadedFiles() {
+  try {
+    const response = await fetch('/api/files/list');
+    if (response.ok) {
+      const data = await response.json();
+      state.uploadedFiles = (data.files || []).map(file => ({
+        id: file.id,
+        name: file.filename || file.name || '未命名文件',
+        size: formatBackendFileSize(file.size),
+        chunks: file.chunks || 0,
+        uploadTime: file.uploaded_at || ''
+      }));
+    } else {
+      state.uploadedFiles = [];
+      showNotification(`获取文件列表失败（${response.status}）`, 'error');
+    }
+  } catch (error) {
+    state.uploadedFiles = [];
+    showNotification('获取文件列表失败', 'error');
+  }
   renderFileList();
 }
 
-function saveUploadedFiles() {
-  localStorage.setItem('uploadedFiles', JSON.stringify(state.uploadedFiles));
+function formatBackendFileSize(sizeInKb) {
+  if (typeof sizeInKb !== 'number') return '-';
+  if (sizeInKb < 1024) return `${sizeInKb} KB`;
+  const mb = sizeInKb / 1024;
+  return `${mb.toFixed(2)} MB`;
 }
 
 function renderFileList() {
@@ -194,7 +201,7 @@ function renderFileList() {
       <div class="file-size">${file.size}</div>
       <div class="file-chunks">${file.chunks} 个片段</div>
       <div class="file-actions">
-        <button class="file-action-btn delete" onclick="deleteFile('${file.id}')" title="删除">
+        <button class="file-action-btn delete" onclick="deleteFile('${file.id || ''}')" title="删除">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M3 6h18"></path><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"></path>
             <path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"></path>
@@ -209,12 +216,24 @@ function getFileIcon(filename) {
   return { pdf: '📄', txt: '📝', md: '📋', doc: '📃', docx: '📃' }[ext] || '📄';
 }
 
-function deleteFile(fileId) {
+async function deleteFile(fileId) {
+  if (!fileId) {
+    showNotification('缺少文件 ID，无法删除', 'error');
+    return;
+  }
   if (!confirm('确定要删除这个文件吗？')) return;
-  state.uploadedFiles = state.uploadedFiles.filter(f => f.id !== fileId);
-  saveUploadedFiles();
-  renderFileList();
-  showNotification('文件已删除', 'success');
+
+  try {
+    const response = await fetch(`/api/files/${fileId}`, { method: 'DELETE' });
+    if (!response.ok && response.status !== 404) {
+      const error = await response.json();
+      throw new Error(error.detail || '删除失败');
+    }
+    await loadUploadedFiles();
+    showNotification('文件记录已删除', 'success');
+  } catch (error) {
+    showNotification(error.message, 'error');
+  }
 }
 
 function showNotification(message, type = 'info') {
