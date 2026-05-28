@@ -1,6 +1,6 @@
 # RAG智能问答系统
 
-一个基于 **FastAPI + LangChain + PGVector** 的知识库问答项目。
+一个基于 **Python + FastAPI + LangChain + PGVector** 的知识库问答项目。
 
 它支持：
 
@@ -56,6 +56,7 @@
 - 使用 `RecursiveCharacterTextSplitter` 自动切分
 - 切分结果写入 PGVector
 - 使用 MD5 记录做去重，避免重复入库
+- 前端文件列表仅展示后端接口返回结果
 
 ### 知识库问答
 
@@ -87,8 +88,10 @@
 - **SQLAlchemy** + **asyncpg**：异步数据库访问
 - **PostgreSQL + PGVector**：向量存储
 - **LangChain & LangGraph**：Agent编排与大模型调度
-- **LangChain Community / LangChain PGVector / LangChain Ollama**：模型与向量相关能力
-- **DashScope**：部分模型能力
+- **LangChain Community / LangChain PGVector**：模型与向量相关能力
+- **DashScope (ChatTongyi)**：默认聊天模型
+- **SiliconFlow OpenAI API**：默认嵌入模型（OpenAIEmbeddings）
+- **Ollama**：可选本地模型/嵌入
 - **PyYAML**：YAML 配置加载
 - **PyPDF**：PDF 解析
 
@@ -122,6 +125,7 @@ FastAPI_chunking/
 ├─ model/
 │  └─ factory.py              # 聊天模型与嵌入模型工厂
 ├─ prompts/
+│  ├─ main_prompt.txt         # Agent 系统提示词
 │  └─ rag_summarize.txt       # RAG 提示词模板
 ├─ rag/
 │  ├─ rag_service.py          # RAG 服务封装
@@ -131,6 +135,8 @@ FastAPI_chunking/
 │  └─ chat.py                 # 问答与会话接口
 ├─ schemas/
 │  └─ chat.py                 # 请求/响应数据结构
+├─ sql/
+│  └─ 001_create_tables.sql   # 会话与文件表结构
 ├─ static/
 │  ├─ index.html              # 前端页面入口
 │  ├─ css/
@@ -152,14 +158,14 @@ FastAPI_chunking/
 - Python 3.13+
 - PostgreSQL 数据库
 - 已启用 PGVector 扩展
-- 可访问的模型服务
+- 可访问的模型服务（DashScope 或 SiliconFlow）
 
 ### 模型依赖
 
-当前代码使用：
+当前代码默认使用：
 
-- `ChatTongyi` 作为聊天模型
-- `OllamaEmbeddings` 作为嵌入模型
+- `ChatTongyi` 作为聊天模型（DashScope）
+- `OpenAIEmbeddings` 作为嵌入模型（SiliconFlow API）
 
 模型名称由 `config/rag.yml` 控制。如果你切换模型服务，需要同步调整：
 
@@ -170,30 +176,13 @@ FastAPI_chunking/
 
 ## 配置说明
 
-### 1. 环境变量 `.env`
-
-`utils/load_env.py` 会从项目根目录读取 `.env` 文件。
-
-建议创建如下内容：
-
-```env
-HOST=127.0.0.1
-PORT=5432
-USER=postgres
-PASSWORD=your_password
-DB=vectordb
-```
-
-> 请根据你的 PostgreSQL 实际账号、密码和数据库名修改。
-
-### 2. `config/pgvector.yml`
+### 1. `config/pgvector.yml`
 
 该文件用于控制数据库和文档处理行为，包含：
 
 - 数据库连接信息
 - `collection_name`
 - `data_path`
-- `md5_hex_store`
 - `allow_knowledge_file_type`
 - `chunk_size` / `chunk_overlap`
 - `separators`
@@ -208,6 +197,14 @@ DB=vectordb
 - `allow_knowledge_file_type`
 - `chunk_size`
 - `chunk_overlap`
+
+### 2. `config/database.yml`
+
+该文件用于会话与文件记录的异步数据库连接池配置，包含：
+
+- `host` / `port` / `dbname` / `user` / `password`
+- `async_pool_size` / `async_max_overflow` / `pool_recycle` / `pool_pre_ping`
+- `max_messages` / `max_tokens`
 
 ### 3. `config/rag.yml`
 
@@ -228,9 +225,27 @@ DB=vectordb
 - 用户问题 `{input}`
 - 检索上下文 `{context}`
 
+### 5. 环境变量（可选）
+
+如果使用 SiliconFlow 的 OpenAI API，需要设置：
+
+- `SILICONFLOW_API_KEY`
+
 ---
 
 ## 安装与启动
+
+### 数据库初始化
+
+1. 启用 PGVector 扩展（如果尚未启用）
+2. 执行会话/文件表结构 SQL：`sql/001_create_tables.sql`
+
+如果你使用 `psql`，可参考：
+
+```powershell
+psql -h <host> -U <user> -d <dbname> -c "CREATE EXTENSION IF NOT EXISTS vector;"
+psql -h <host> -U <user> -d <dbname> -f .\sql\001_create_tables.sql
+```
 
 ### 方式一：使用 `uv`（推荐）
 
@@ -280,7 +295,42 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 {
   "message": "文件解析、切分并写入向量库成功",
   "filename": "your_document.pdf",
-  "chunks": []
+  "chunks": [],
+  "file_id": "uuid"
+}
+```
+
+### 获取已上传文件列表
+
+**GET** `/api/files/list`
+
+返回示例：
+
+```json
+{
+  "files": [
+    {
+      "id": "uuid",
+      "filename": "your_document.pdf",
+      "size": 123,
+      "uploaded_at": "2026-05-28T02:40:10.399516+00:00",
+      "md5_hex": "..."
+    }
+  ]
+}
+```
+
+> `size` 为 KB。前端根据该值换算显示。
+
+### 删除文件记录
+
+**DELETE** `/api/files/{file_id}`
+
+返回示例：
+
+```json
+{
+  "message": "文件记录已删除"
 }
 ```
 
@@ -335,11 +385,11 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 ### 文档入库流程
 
 1. 用户调用 `/api/files/upload`
-2. 文件先保存到 `data/`
+2. 文件保存到 `data/`（使用 UUID 文件名避免冲突）
 3. 根据配置校验文件类型
 4. 读取文件内容并切分
 5. 写入 PGVector
-6. 记录文件 MD5，防止重复导入
+6. 记录文件 MD5 与元信息到 `uploaded_files` 表
 7. 删除临时文件
 
 ### 问答流程
@@ -393,11 +443,19 @@ uv run python -m py_compile main.py
 - 嵌入模型不可用
 - `chatId` 或 `conversation_id` 格式不合法
 
-### 3. 为什么会看到 `304 Not Modified`？
+### 3. 向量检索报错或无结果怎么办？
 
-这是浏览器缓存命中，表示静态资源没有变化，属于正常现象。
+常见原因：
 
-### 4. 为什么关闭应用时会执行数据库关闭？
+- 未设置 `SILICONFLOW_API_KEY`
+- `config/rag.yml` 中嵌入模型名称不可用
+- PGVector 连接参数不正确
+
+### 4. 为什么会看到 `304 Not Modified`？
+
+这是浏览器缓存命中，表示静态资源没有变化，属于正常现象。更新静态资源后可使用强制刷新。
+
+### 5. 为什么关闭应用时会执行数据库关闭？
 
 `main.py` 使用了 FastAPI `lifespan`，应用退出时会执行 `close_db()` 来释放数据库资源。
 
@@ -408,7 +466,3 @@ uv run python -m py_compile main.py
 如未另行说明，默认按项目内部使用或作者指定许可证处理。若你准备对外开源，建议在仓库中补充明确许可证文件（如 MIT / Apache-2.0）。
 
 ---
-
-## 致谢
-
-感谢 FastAPI、LangChain、PostgreSQL、PGVector 及相关开源生态。
