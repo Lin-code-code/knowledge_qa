@@ -13,11 +13,11 @@ from model.factory import openai_embed_model
 class VectorStoreService:
     def __init__(
             self,
-            chukn_size: int = pg_conf["chunk_size"],
+            chunk_size: int = pg_conf["chunk_size"],
             chunk_overlap: int = pg_conf["chunk_overlap"],
             connection_str: str = f"postgresql+psycopg://{pg_conf['user']}:{pg_conf['password']}@{pg_conf['host']}:{pg_conf['port']}/{pg_conf['dbname']}"
     ):
-        self.chukn_size = chukn_size
+        self.chukn_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
 
@@ -85,5 +85,3 @@ class VectorStoreService:
                 logger.error(f"[加载知识库]文件{path}加载失败,错误信息:{str(e)}", exc_info= True)
                 continue
         return None
-
-
