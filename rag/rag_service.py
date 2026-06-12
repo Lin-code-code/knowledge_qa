@@ -29,7 +29,7 @@ class RagService:
         docs = self.retriever_docs(query)
         sources = []
         for doc in docs:
-            source_title = doc.metadata.get('source', '未知来源')
+            source_title = doc.metadata.get('source', '未知来源').split("\\")[-1]  # 获取文件名作为来源标题
             sources.append(source_title)
         return sources
 

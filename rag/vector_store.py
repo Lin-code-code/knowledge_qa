@@ -1,10 +1,8 @@
-from pathlib import Path
 from langchain_core.documents import Document
 from langchain_postgres import PGVector
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from utils.config_handler import pg_conf
-from utils.path_tool import get_abs_path
 from utils.file_handler import pdf_loader, txt_loader, listdir_with_allowed_type
 from utils.logger_handler import logger
 

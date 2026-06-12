@@ -7,7 +7,8 @@ from utils.config_handler import pg_conf
 from utils.path_tool import get_abs_path
 
 from utils.file_handler import get_file_md5_hex
-from history.db.files import get_uploaded_file_by_md5, save_uploaded_file_details, get_all_uploaded_files, delete_uploaded_file_by_id
+from history.db.files import get_uploaded_file_by_md5, save_uploaded_file_details, get_all_uploaded_files, \
+    delete_uploaded_file_by_id, delete_by_file_id
 
 router = APIRouter(prefix="/api/files", tags=["Files"])
 
@@ -95,10 +96,14 @@ async def list_uploaded_files(db = Depends(get_db)):
 @router.delete("/{file_id}")
 async def delete_uploaded_file(file_id: str, db = Depends(get_db)):
     try:
+        # 先删除数据库中的文件记录
         deleted = await delete_uploaded_file_by_id(file_id=file_id, db=db)
+        # print(file_id)
+        # 删除向量库中的相关向量数据
+        deleted_count = await delete_by_file_id(file_id=file_id.replace("-", ""), db=db)
         if not deleted:
             raise HTTPException(status_code=404, detail="文件记录不存在")
-        return {"message": "文件记录已删除"}
+        return {"message": f"文件记录已删除"}
     except HTTPException:
         raise
     except Exception as e:

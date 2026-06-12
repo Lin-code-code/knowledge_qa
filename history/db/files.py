@@ -4,8 +4,7 @@
 from typing import Sequence, Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, delete
-
+from sqlalchemy import select, delete, text
 from history.models import UploadedFile
 
 
@@ -56,3 +55,20 @@ async def delete_uploaded_file_by_id(
     deleted_id = result.scalar_one_or_none()
     await db.commit()
     return deleted_id is not None
+
+# 通过 file_id 异步删除向量数据
+async def delete_by_file_id(file_id: str, db: AsyncSession):
+    try:
+        # 操作langchain默认表，通过编写原生 SQL (使用 ->> 提取 JSONB 文本值)
+        sql_query = text(
+            "DELETE FROM langchain_pg_embedding WHERE cmetadata ->> 'file_id' = :fid"
+        )
+        # 执行删除
+        res = await db.execute(sql_query, {"fid": file_id})
+        # 提交事务
+        await db.commit()
+        return res.rowcount
+    except Exception as e:
+        # 发生错误时回滚
+        await db.rollback()
+        raise e
