@@ -1,7 +1,5 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
-from typing import AsyncGenerator
-from utils.config_handler import db_conf
-from utils.load_env import env_conf
+from core.config import db_conf, env_conf
 
 ASYNC_DB_URL = (
     f"postgresql+asyncpg://{env_conf.DB_USER}:{env_conf.DB_PASSWORD}"
@@ -17,28 +15,8 @@ engine = create_async_engine(
     echo=False,
 )
 
-# 创建异步会话工厂
 async_session_factory = async_sessionmaker(
     engine,
     class_=AsyncSession,
     expire_on_commit=False,
 )
-
-
-# 获取异步数据库 session
-async def get_db():
-    """FastAPI 依赖注入：获取异步数据库 session"""
-    async with async_session_factory() as session:
-        try:
-            yield session
-            await session.commit()
-        except Exception as e:
-            await session.rollback()
-            raise e
-        finally:
-            await session.close()
-
-
-async def close_db():
-    """应用关闭时清理连接池"""
-    await engine.dispose()

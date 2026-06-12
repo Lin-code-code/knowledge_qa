@@ -1,6 +1,6 @@
-from utils.path_tool import get_abs_path
-from utils.logger_handler import logger
-from utils.config_handler import prompts_conf
+from core.paths import get_abs_path
+from core.logger import logger
+from core.config import prompts_conf
 
 def load_rag_prompts():
     try:

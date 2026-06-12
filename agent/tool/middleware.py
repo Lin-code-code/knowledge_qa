@@ -5,7 +5,7 @@ from langchain_core.messages import ToolMessage
 from langchain.agents import AgentState
 from langgraph.types import Command
 from langgraph.runtime import Runtime
-from utils.logger_handler import logger
+from core.logger import logger
 
 
 @wrap_tool_call

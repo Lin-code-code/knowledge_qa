@@ -5,7 +5,8 @@ from fastapi import FastAPI
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from routers import chat, files
+from api import chat, documents
+from db.session import close_db
 
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
@@ -14,7 +15,6 @@ static_dir = os.path.join(os.path.dirname(__file__), "static")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    from history.db.engine import close_db
     await close_db()
 
 
@@ -27,7 +27,7 @@ app = FastAPI(
 if os.path.exists(static_dir):
     app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-app.include_router(files.router)
+app.include_router(documents.router)
 app.include_router(chat.router)
 
 

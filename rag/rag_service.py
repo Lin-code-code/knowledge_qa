@@ -3,7 +3,6 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from rag.vector_store import VectorStoreService
 from utils.prompt_loader import load_rag_prompts
-from utils.load_env import env_conf
 from model.factory import get_chat_model
 
 class RagService:

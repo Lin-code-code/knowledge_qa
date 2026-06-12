@@ -1,22 +1,14 @@
-from functools import lru_cache
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from langchain_core.messages import HumanMessage, AIMessage
-from history.db.engine import get_db
-from history.db.message_store import AsyncMessageStore
-from agent.tool.agent_tools import get_rag_service
+from db.session import get_db
+from db.conversation_repo import ConversationRepository
+from services.chat_service import ChatService
 from schemas.chat import (
     ChatRequest, ChatResponse, ChatDeleteResponse,
     ConversationCreateRequest, ConversationCreateResponse,
     ConversationListResponse, MessageListResponse
 )
 import uuid
-
-
-@lru_cache(maxsize=1)
-def _get_react_agent():
-    from agent.react_agent import ReactAgent
-    return ReactAgent()
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
@@ -26,13 +18,11 @@ async def list_conversations(
     user_id: str = "anonymous",
     db: AsyncSession = Depends(get_db),
 ):
-    """获取当前用户的会话列表"""
     try:
-        store = AsyncMessageStore(db)
+        store = ConversationRepository(db)
         convs = await store.list_conversations(user_id=user_id)
         items = []
         for c in convs:
-            msgs = await store.get_messages(c.id, limit=1)
             items.append({
                 "conversation_id": str(c.id),
                 "title": c.title,
@@ -50,14 +40,13 @@ async def get_chat_messages(
     conversation_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """获取指定会话的消息列表"""
     try:
         conv_uuid = uuid.UUID(conversation_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="conversation_id 格式无效")
 
     try:
-        store = AsyncMessageStore(db)
+        store = ConversationRepository(db)
         msgs = await store.get_messages(conv_uuid)
         return MessageListResponse(
             messages=[{
@@ -76,9 +65,8 @@ async def create_conversation(
     request: ConversationCreateRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """创建新会话"""
     try:
-        store = AsyncMessageStore(db)
+        store = ConversationRepository(db)
         conv_id = await store.create_conversation(
             user_id=request.user_id or "anonymous",
             title=request.title or "新对话",
@@ -96,47 +84,15 @@ async def chat(
     request: ChatRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    """带历史对话的多轮问答接口"""
+    if not request.message or not request.message.strip():
+        raise HTTPException(status_code=400, detail="消息不能为空")
+
     try:
-        if not request.message or not request.message.strip():
-            raise HTTPException(status_code=400, detail="消息不能为空")
-
-        store = AsyncMessageStore(db)
-
-        # 无 chatId 时先创建新会话
-        if not request.chatId:
-            conv_id = await store.create_conversation(
-                user_id="anonymous",
-                title=request.message[:30] + ("..." if len(request.message) > 30 else ""),
-            )
-            conversation_id = str(conv_id)
-        else:
-            conversation_id = request.chatId
-
-        try:
-            conv_uuid = uuid.UUID(conversation_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="conversation_id 格式无效")
-
-        history = await store.get_recent_messages(conv_uuid)
-
-        agent = _get_react_agent()
-        answer = await agent.aexecute(request.message, history)
-
-        rag_service = get_rag_service()
-        sources = rag_service.get_sources(request.message)
-
-        await store.add_messages(conv_uuid, [
-            HumanMessage(content=request.message),
-            AIMessage(content=answer),
-        ])
-
-        return ChatResponse(
-            answer=answer,
-            sources=sources,
-            chatId=conversation_id,
+        service = ChatService(db)
+        answer, sources, chat_id = await service.process_message(
+            request.message, request.chatId
         )
-
+        return ChatResponse(answer=answer, sources=sources, chatId=chat_id)
     except HTTPException:
         raise
     except Exception as e:
@@ -148,14 +104,13 @@ async def delete_chat(
     chat_id: str,
     db: AsyncSession = Depends(get_db),
 ):
-    """删除指定对话及其所有消息"""
     try:
         try:
             conv_uuid = uuid.UUID(chat_id)
         except ValueError:
             raise HTTPException(status_code=400, detail="conversation_id 格式无效")
 
-        store = AsyncMessageStore(db)
+        store = ConversationRepository(db)
         deleted = await store.delete_conversation(conv_uuid)
 
         if not deleted:

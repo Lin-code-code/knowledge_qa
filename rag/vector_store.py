@@ -2,10 +2,9 @@ from langchain_core.documents import Document
 from langchain_postgres import PGVector
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from utils.config_handler import pg_conf
-from utils.file_handler import pdf_loader, txt_loader, listdir_with_allowed_type
-from utils.logger_handler import logger
-from utils.load_env import env_conf
+from core.config import pg_conf, env_conf
+from core.logger import logger
+from utils.file_handler import pdf_loader, txt_loader
 
 from model.factory import get_openai_embed_model
 

@@ -2,7 +2,7 @@ import os
 from langchain_ollama.embeddings import OllamaEmbeddings
 from langchain_community.chat_models.tongyi import ChatTongyi
 from langchain_core.language_models import BaseChatModel
-from utils.config_handler import rag_conf
+from core.config import rag_conf
 
 from langchain_openai.chat_models import ChatOpenAI
 from langchain_openai.embeddings import OpenAIEmbeddings

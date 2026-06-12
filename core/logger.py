@@ -1,7 +1,7 @@
 import logging
 import os
 from logging.handlers import TimedRotatingFileHandler
-from utils.path_tool import get_abs_path
+from core.paths import get_abs_path
 
 LOG_ROOT = get_abs_path("logs")
 os.makedirs(LOG_ROOT, exist_ok=True)

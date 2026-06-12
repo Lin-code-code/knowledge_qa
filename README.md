@@ -38,7 +38,7 @@
 4. 用户提问时，系统先检索相关知识片段
 5. 将检索结果交给大模型生成回答
 
-项目结构清晰，适合作为：
+项目采用分层架构（API → Service → Repository），职责清晰，适合作为：
 
 - RAG 项目样板
 - FastAPI + PostgreSQL 向量库实践项目
@@ -101,52 +101,76 @@
 
 ```text
 FastAPI_chunking/
-├─ main.py                    # FastAPI 应用入口
-├─ pyproject.toml             # 项目依赖与构建配置
-├─ uv.lock                    # uv 锁定文件
-├─ agent/                     # 智能代理组件
-│  ├─ react_agent.py          # ReactAgent 实现
+├─ main.py                     # FastAPI 应用入口
+├─ pyproject.toml              # 项目依赖与构建配置
+├─ uv.lock                     # uv 锁定文件
+│
+├─ core/                       # ★ 基础设施（原 utils/ 拆分）
+│  ├─ config.py                # EnvConfig + 懒加载 YAML 配置
+│  ├─ logger.py                # 日志封装（控制台 + 按天轮转文件）
+│  ├─ paths.py                 # 路径工具（项目根目录发现）
+│  └─ validators.py            # 通用校验函数（文件扩展名等）
+│
+├─ models/                     # ★ ORM 模型（原 history/models 拆分）
+│  ├─ base.py                  # DeclarativeBase
+│  ├─ conversation.py          # Conversation + Message
+│  └─ uploaded_file.py         # UploadedFile
+│
+├─ db/                         # ★ 数据访问层（原 history/db/）
+│  ├─ engine.py                # 异步数据库引擎与 session 工厂
+│  ├─ session.py               # get_db() / close_db() 依赖注入
+│  ├─ conversation_repo.py     # ConversationRepository（会话 CRUD）
+│  └─ file_repo.py             # FileRepository（文件记录 CRUD + 向量删除）
+│
+├─ services/                   # ★ 业务编排层（新增，从 api/ 提取）
+│  ├─ chat_service.py          # ChatService：多轮问答业务流程
+│  └─ document_service.py      # DocumentService：文件上传入库流程
+│
+├─ api/                        # ★ API 层（原 routers/ 重命名 + 瘦身）
+│  ├─ chat.py                  # 问答与会话接口（仅 HTTP 适配）
+│  └─ documents.py             # 文件上传/列表/删除接口
+│
+├─ agent/                      # 智能代理组件
+│  ├─ react_agent.py           # ReactAgent（LangGraph 实现）
 │  └─ tool/
-│     ├─ agent_tools.py       # Agent 工具(如 rag_summarize, 时间查询等)
-│     └─ middleware.py
-├─ history/                   # 会话历史相关逻辑
-│  ├─ __init__.py
-│  ├─ models.py               # 历史消息相关模型
-│  └─ db/
-│     ├─ __init__.py
-│     ├─ engine.py           # 数据库引擎
-│     └─ message_store.py    # 消息存储实现
-├─ config/
-│  ├─ pgvector.yml            # 数据库、切分、文件类型等配置
-│  ├─ rag.yml                 # 模型配置
-│  └─ prompts.yml             # 提示词文件路径配置
-├─ data/                      # 上传文件临时目录 / 知识文件目录
-├─ logs/                      # 运行日志目录
+│     ├─ agent_tools.py        # Agent 工具（rag_summarize, 时间查询）
+│     └─ middleware.py         # 工具调用监控与日志
+│
+├─ rag/                        # RAG 检索
+│  ├─ rag_service.py           # RAG 服务（检索 + 生成）
+│  └─ vector_store.py          # PGVector 文档入库与向量检索
+│
 ├─ model/
-│  └─ factory.py              # 聊天模型与嵌入模型工厂
-├─ prompts/
-│  ├─ main_prompt.txt         # Agent 系统提示词
-│  └─ rag_summarize.txt       # RAG 提示词模板
-├─ rag/
-│  ├─ rag_service.py          # RAG 服务封装
-│  └─ vector_store.py         # PGVector 文档入库与检索
-├─ routers/
-│  ├─ files.py                # 文件上传接口
-│  └─ chat.py                 # 问答与会话接口
+│  └─ factory.py               # 聊天/嵌入模型工厂（ChatTongyi, Ollama, SiliconFlow）
+│
+├─ config/                     # YAML 配置（不含数据库密码等敏感信息）
+│  ├─ pgvector.yml             # 切分、文件类型、集合名配置
+│  ├─ rag.yml                  # 模型名称配置
+│  ├─ prompts.yml              # 提示词文件路径
+│  └─ database.yml             # 连接池与对话管理参数
+│
+├─ utils/                      # 保留工具（未迁移）
+│  ├─ file_handler.py          # 文档读取、MD5 计算
+│  └─ prompt_loader.py         # 提示词模板文件加载
+│
 ├─ schemas/
-│  └─ chat.py                 # 请求/响应数据结构
-├─ sql/
-│  └─ 001_create_tables.sql   # 会话与文件表结构
-├─ static/
-│  ├─ index.html              # 前端页面入口
+│  └─ chat.py                  # Pydantic 请求/响应模型
+│
+├─ prompts/
+│  ├─ main_prompt.txt          # Agent 系统提示词
+│  └─ rag_summarize.txt        # RAG 摘要提示词模板
+│
+├─ static/                     # 前端静态文件
+│  ├─ index.html               # SPA 入口
 │  ├─ css/
 │  └─ js/
-└─ utils/
-   ├─ config_handler.py       # YAML 配置加载
-   ├─ file_handler.py         # 文档读取、MD5、文件处理
-   ├─ load_env.py             # `.env` 环境变量读取
-   ├─ logger_handler.py       # 日志封装
-   └─ path_tool.py            # 路径工具
+│
+├─ data/                       # 上传文件临时目录
+├─ logs/                       # 运行日志（按天轮转，保留 30 天）
+└─ tests/                      # 测试目录
+   ├─ conftest.py
+   ├─ unit/
+   └─ integration/
 ```
 
 ---
@@ -176,37 +200,41 @@ FastAPI_chunking/
 
 ## 配置说明
 
-### 1. `config/pgvector.yml`
+### 1. `.env` 环境变量（数据库凭据）
 
-该文件用于控制数据库和文档处理行为，包含：
+数据库连接信息统一从项目根目录的 `.env` 文件读取，**不再存储在 YAML 配置中**：
 
-- 数据库连接信息
-- `collection_name`
+```
+HOST=192.168.1.100
+PORT=5432
+USER=postgres
+PASSWORD=your_password
+DB=vectordb
+```
+
+如果使用 SiliconFlow，还需要设置系统环境变量（非 `.env`）：
+
+- `SILICONFLOW_API_KEY`
+
+### 2. `config/pgvector.yml`
+
+该文件控制文档切分与向量存储行为：
+
+- `collection_name_768` / `collection_name_1024`
 - `data_path`
 - `allow_knowledge_file_type`
 - `chunk_size` / `chunk_overlap`
 - `separators`
+- `k`（检索返回数量）
 
-通常你最需要调整的是：
+### 3. `config/database.yml`
 
-- `host`
-- `port`
-- `dbname`
-- `user`
-- `password`
-- `allow_knowledge_file_type`
-- `chunk_size`
-- `chunk_overlap`
+该文件用于会话与文件记录的异步连接池参数：
 
-### 2. `config/database.yml`
-
-该文件用于会话与文件记录的异步数据库连接池配置，包含：
-
-- `host` / `port` / `dbname` / `user` / `password`
 - `async_pool_size` / `async_max_overflow` / `pool_recycle` / `pool_pre_ping`
 - `max_messages` / `max_tokens`
 
-### 3. `config/rag.yml`
+### 4. `config/rag.yml`
 
 该文件主要配置模型名称：
 
@@ -215,7 +243,7 @@ FastAPI_chunking/
 - `ol_chat_model_name`
 - `ol_embedding_model_name`
 
-### 4. `config/prompts.yml` 和 `prompts/rag_summarize.txt`
+### 5. `config/prompts.yml` 和 `prompts/rag_summarize.txt`
 
 - `config/prompts.yml` 指定提示词文件路径
 - `prompts/rag_summarize.txt` 是 RAG 生成模板
@@ -225,27 +253,19 @@ FastAPI_chunking/
 - 用户问题 `{input}`
 - 检索上下文 `{context}`
 
-### 5. 环境变量（可选）
-
-如果使用 SiliconFlow 的 OpenAI API，需要设置：
-
-- `SILICONFLOW_API_KEY`
-
 ---
 
 ## 安装与启动
 
 ### 数据库初始化
 
-1. 启用 PGVector 扩展（如果尚未启用）
-2. 执行会话/文件表结构 SQL：`sql/001_create_tables.sql`
-
-如果你使用 `psql`，可参考：
+确保 PostgreSQL 已启用 PGVector 扩展：
 
 ```powershell
 psql -h <host> -U <user> -d <dbname> -c "CREATE EXTENSION IF NOT EXISTS vector;"
-psql -h <host> -U <user> -d <dbname> -f .\sql\001_create_tables.sql
 ```
+
+应用启动后，ORM 模型会自动创建 `conversations`、`messages`、`uploaded_files` 表（需确保数据库用户有建表权限）。
 
 ### 方式一：使用 `uv`（推荐）
 
@@ -384,23 +404,24 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 
 ### 文档入库流程
 
-1. 用户调用 `/api/files/upload`
-2. 文件保存到 `data/`（使用 UUID 文件名避免冲突）
-3. 根据配置校验文件类型
-4. 读取文件内容并切分
-5. 写入 PGVector
-6. 记录文件 MD5 与元信息到 `uploaded_files` 表
+1. 用户调用 `api/documents.py` 的 `/api/files/upload`
+2. 文件类型通过 `core/validators.py` 校验
+3. 流式写入 `data/`（边写边算 MD5，避免大文件 OOM）
+4. 写入 MD5 到文件记录表，通过 `db/file_repo.py` 去重
+5. 调用 `rag/vector_store.py` 读取文件内容并切分
+6. 切分结果写入 PGVector
 7. 删除临时文件
 
 ### 问答流程
 
-1. 用户调用 `/api/chat/`
-2. 系统读取最近对话历史
-3. 将对话历史和最新问题传递给 `ReactAgent`
-4. `ReactAgent` 分析意图，自主决定是否需要使用工具（如调用向量检索服务获取背景知识片段）
-5. Agent 结合系统背景设定、检索获取的文档和用户问题合成最终回答
-6. 接口同时返回所调用的相关知识库片段元数据（Sources）
-7. 把用户消息和模型回答写回会话存储
+1. 用户调用 `api/chat.py` 的 `/api/chat/`
+2. `services/chat_service.py` 编排业务流程
+3. `db/conversation_repo.py` 读取最近对话历史（含 token 窗口裁剪）
+4. 将对话历史和最新问题传递给 `ReactAgent`
+5. `ReactAgent` 分析意图，自主决定是否调用工具（如通过 `rag_summarize` 检索知识库）
+6. Agent 合成最终回答
+7. 接口同时返回相关知识库来源（Sources）
+8. 用户消息和模型回答写回会话存储
 
 ---
 
@@ -409,15 +430,24 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 欢迎提交 Issue 和 Pull Request。建议遵循以下原则：
 
 - 提交前先确认配置不会暴露真实密钥
+- 数据库凭据统一放在 `.env`，YAML 配置只放非敏感参数
 - 改模型相关代码时，优先检查 `model/factory.py`
 - 改检索与切分逻辑时，优先检查 `rag/vector_store.py`
+- 改业务编排逻辑时，优先检查 `services/`
 - 改提示词时，优先检查 `prompts/rag_summarize.txt`
 - 扩展接口时，记得同步更新 `schemas/chat.py`
+- 新增 API 端点时，路由写在 `api/`，业务逻辑写在 `services/`
 
 如果你准备贡献代码，建议先在本地完成：
 
 ```powershell
 uv run python -m py_compile main.py
+```
+
+### 运行测试
+
+```powershell
+uv run pytest tests/
 ```
 
 ---
@@ -447,9 +477,9 @@ uv run python -m py_compile main.py
 
 常见原因：
 
-- 未设置 `SILICONFLOW_API_KEY`
+- 未设置 `SILICONFLOW_API_KEY`（系统环境变量）
 - `config/rag.yml` 中嵌入模型名称不可用
-- PGVector 连接参数不正确
+- `.env` 中数据库连接参数不正确
 
 ### 4. 为什么会看到 `304 Not Modified`？
 
@@ -457,12 +487,10 @@ uv run python -m py_compile main.py
 
 ### 5. 为什么关闭应用时会执行数据库关闭？
 
-`main.py` 使用了 FastAPI `lifespan`，应用退出时会执行 `close_db()` 来释放数据库资源。
+`main.py` 使用了 FastAPI `lifespan`，应用退出时会调用 `db.session.close_db()` 来释放数据库资源。
 
 ---
 
 ## 许可证
 
-如未另行说明，默认按项目内部使用或作者指定许可证处理。若你准备对外开源，建议在仓库中补充明确许可证文件（如 MIT / Apache-2.0）。
-
----
+MIT License

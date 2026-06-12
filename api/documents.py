@@ -2,13 +2,12 @@ import os, uuid, hashlib
 from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
 
 from sqlalchemy.ext.asyncio import AsyncSession
-from history.db.engine import get_db
+from db.session import get_db
 from rag.vector_store import VectorStoreService
-from utils.config_handler import pg_conf
-from utils.path_tool import get_abs_path
-
-from history.db.files import get_uploaded_file_by_md5, save_uploaded_file_details, get_all_uploaded_files, \
-    delete_uploaded_file_by_id, delete_by_file_id
+from core.config import pg_conf
+from core.paths import get_abs_path
+from core.validators import validate_file_extension
+from db.file_repo import FileRepository
 
 router = APIRouter(prefix="/api/files", tags=["Files"])
 
@@ -24,12 +23,10 @@ async def upload_and_split(
         raise HTTPException(status_code=400, detail="未检测到上传文件名")
 
     allowed_types = {t.lower().lstrip(".") for t in pg_conf.get("allow_knowledge_file_type", [])}
-    extension = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
-    if extension not in allowed_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"不支持的文件类型: {extension or 'unknown'}，仅支持: {sorted(allowed_types)}",
-        )
+    try:
+        extension = validate_file_extension(filename, allowed_types)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
     temp_path = ""
     try:
@@ -53,7 +50,8 @@ async def upload_and_split(
 
         file_md5_hex = md5_hash.hexdigest()
 
-        exist_file = await get_uploaded_file_by_md5(md5_hex=file_md5_hex, db=db)
+        repo = FileRepository(db)
+        exist_file = await repo.get_by_md5(md5_hex=file_md5_hex)
         if exist_file is not None:
             raise HTTPException(status_code=400, detail="文件已存在于向量库中！")
 
@@ -61,12 +59,11 @@ async def upload_and_split(
         if split_documents is None:
             raise HTTPException(status_code=500, detail="文件解析、切分并写入向量库失败")
 
-        newfile = await save_uploaded_file_details(
+        newfile = await repo.save(
             file_id=file_id,
             filename=filename,
             md5_hex=file_md5_hex,
             file_size=file_size // 1024,
-            db=db
         )
 
         return {
@@ -88,7 +85,8 @@ async def upload_and_split(
 @router.get("/list")
 async def list_uploaded_files(db: AsyncSession = Depends(get_db)):
     try:
-        files = await get_all_uploaded_files(db=db)
+        repo = FileRepository(db)
+        files = await repo.list_all()
         return {"files": files}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"获取文件列表失败: {str(e)}")
@@ -97,11 +95,9 @@ async def list_uploaded_files(db: AsyncSession = Depends(get_db)):
 @router.delete("/{file_id}")
 async def delete_uploaded_file(file_id: str, db: AsyncSession = Depends(get_db)):
     try:
-        # 先删除数据库中的文件记录
-        deleted = await delete_uploaded_file_by_id(file_id=file_id, db=db)
-        # print(file_id)
-        # 删除向量库中的相关向量数据
-        deleted_count = await delete_by_file_id(file_id=file_id.replace("-", ""), db=db)
+        repo = FileRepository(db)
+        deleted = await repo.delete_by_id(file_id=file_id)
+        deleted_count = await repo.delete_vector_embeddings(file_id=file_id.replace("-", ""))
         if not deleted:
             raise HTTPException(status_code=404, detail="文件记录不存在")
         return {"message": f"文件记录已删除"}
