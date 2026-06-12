@@ -3,11 +3,11 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from utils.path_tool import get_abs_path
 
 class EnvConfig(BaseSettings):
-    HOST: str = Field(validation_alias=AliasChoices("HOST", "host"))
-    PORT: int = Field(validation_alias=AliasChoices("PORT", "port"))
-    USER: str = Field(..., validation_alias=AliasChoices("USER", "user"), repr=False)
-    PASSWORD: str = Field(validation_alias=AliasChoices("PASSWORD", "password"))
-    DB: str = Field(validation_alias=AliasChoices("DB", "database", "DB_NAME"))
+    DB_HOST: str = Field(validation_alias=AliasChoices("DB_HOST", "HOST", "host"))
+    DB_PORT: int = Field(validation_alias=AliasChoices("DB_PORT", "PORT", "port"))
+    DB_USER: str = Field(..., validation_alias=AliasChoices("DB_USER", "USER", "user"), repr=False)
+    DB_PASSWORD: str = Field(validation_alias=AliasChoices("DB_PASSWORD", "PASSWORD", "password"))
+    DB_NAME: str = Field(validation_alias=AliasChoices("DB_NAME", "DB", "database", "dbname"))
 
     model_config = SettingsConfigDict(
         env_file=get_abs_path(".env"),
@@ -19,8 +19,10 @@ class EnvConfig(BaseSettings):
 env_conf = EnvConfig()
 
 if __name__ == '__main__':
-    print(env_conf.HOST)
-    print(env_conf.PORT)
-    print(env_conf.USER)
-    print(env_conf.PASSWORD)
-    print(env_conf.DB)
+    print(env_conf.DB_HOST)
+    print(env_conf.DB_PORT)
+    print(env_conf.DB_USER)
+    print(env_conf.DB_PASSWORD)
+    print(env_conf.DB_NAME)
+    import os
+    print(f"SILICONFLOW_API_KEY={'已配置' if os.environ.get('SILICONFLOW_API_KEY') else '未配置'}")

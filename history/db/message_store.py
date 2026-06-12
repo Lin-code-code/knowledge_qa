@@ -11,6 +11,12 @@ MAX_MESSAGES = db_conf.get("max_messages", 30)
 MAX_TOKENS = db_conf.get("max_tokens", 2000)
 
 
+def _estimate_tokens(text: str) -> int:
+    chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    other_chars = len(text) - chinese_chars
+    return int(chinese_chars / 1.5 + other_chars / 4)
+
+
 class AsyncMessageStore:
     """异步消息存储层，负责会话和消息的 CRUD"""
 
@@ -46,8 +52,7 @@ class AsyncMessageStore:
 
         records.reverse()
 
-        total_chars = sum(len(m.content) for m in records)
-        total_est_tokens = total_chars / 4
+        total_est_tokens = sum(_estimate_tokens(m.content) for m in records)
 
         if total_est_tokens <= MAX_TOKENS:
             return [self._to_langchain(m) for m in records]
@@ -55,7 +60,7 @@ class AsyncMessageStore:
         result = []
         token_count = 0
         for m in reversed(records):
-            est_tokens = len(m.content) / 4
+            est_tokens = _estimate_tokens(m.content)
             if token_count + est_tokens > MAX_TOKENS:
                 break
             result.append(m)

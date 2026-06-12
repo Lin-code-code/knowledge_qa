@@ -30,7 +30,7 @@ class ConversationListItem(BaseModel):
     message_count: int
 
 class ConversationListResponse(BaseModel):
-    conversations: list
+    conversations: list[ConversationListItem]
 
 class MessageItem(BaseModel):
     role: str
@@ -38,5 +38,5 @@ class MessageItem(BaseModel):
     created_at: str
 
 class MessageListResponse(BaseModel):
-    messages: list
+    messages: list[MessageItem]
     conversation_id: str

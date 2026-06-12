@@ -4,26 +4,26 @@ from langchain_core.prompts import PromptTemplate
 from rag.vector_store import VectorStoreService
 from utils.prompt_loader import load_rag_prompts
 from utils.load_env import env_conf
-from model.factory import chat_model
-
-# connect_str = f"postgresql+psycopg://{env_conf.USER}:{env_conf.PASSWORD}@{env_conf.HOST}:{env_conf.PORT}/{env_conf.DB}"
+from model.factory import get_chat_model
 
 class RagService:
     def __init__(self):
         self.vector_store = VectorStoreService()
-        self.retriever = self.vector_store.get_retriver()
+        self.retriever = self.vector_store.get_retriever()
         self.prompt_text = load_rag_prompts()
         self.prompt = PromptTemplate.from_template(self.prompt_text)
-        self.model = chat_model
+        self.model = get_chat_model()
         self.chain = self._init_chain()
+        self._retrieval_cache: dict[str, list[Document]] = {}
 
     def _init_chain(self):
         chain = self.prompt | self.model | StrOutputParser()
         return chain
 
-    # 检索函数
     def retriever_docs(self, query: str) -> list[Document]:
-        return self.retriever.invoke(query)
+        if query not in self._retrieval_cache:
+            self._retrieval_cache[query] = self.retriever.invoke(query)
+        return self._retrieval_cache[query]
 
     def get_sources(self, query: str) -> list:
         docs = self.retriever_docs(query)
@@ -51,5 +51,8 @@ class RagService:
         )
 
 if __name__ == '__main__':
-    rag = RagService()
-    print(rag.rag_summarize("扫地机器人是如何实现自主导航的？"))
+    # rag = RagService()
+    # print(rag.rag_summarize("扫地机器人是如何实现自主导航的？"))
+
+    a = {3: 5}
+    print(a.get(3))

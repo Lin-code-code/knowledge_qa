@@ -1,15 +1,22 @@
+from functools import lru_cache
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
+from langchain_core.messages import HumanMessage, AIMessage
 from history.db.engine import get_db
 from history.db.message_store import AsyncMessageStore
-from agent.react_agent import ReactAgent
-from rag.rag_service import RagService
+from agent.tool.agent_tools import get_rag_service
 from schemas.chat import (
     ChatRequest, ChatResponse, ChatDeleteResponse,
     ConversationCreateRequest, ConversationCreateResponse,
     ConversationListResponse, MessageListResponse
 )
 import uuid
+
+
+@lru_cache(maxsize=1)
+def _get_react_agent():
+    from agent.react_agent import ReactAgent
+    return ReactAgent()
 
 router = APIRouter(prefix="/api", tags=["Chat"])
 
@@ -113,13 +120,12 @@ async def chat(
 
         history = await store.get_recent_messages(conv_uuid)
 
-        agent = ReactAgent()
+        agent = _get_react_agent()
         answer = await agent.aexecute(request.message, history)
 
-        rag_service = RagService()
+        rag_service = get_rag_service()
         sources = rag_service.get_sources(request.message)
 
-        from langchain_core.messages import HumanMessage, AIMessage
         await store.add_messages(conv_uuid, [
             HumanMessage(content=request.message),
             AIMessage(content=answer),

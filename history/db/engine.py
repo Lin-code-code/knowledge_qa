@@ -1,10 +1,11 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from typing import AsyncGenerator
 from utils.config_handler import db_conf
+from utils.load_env import env_conf
 
 ASYNC_DB_URL = (
-    f"postgresql+asyncpg://{db_conf['user']}:{db_conf['password']}"
-    f"@{db_conf['host']}:{db_conf['port']}/{db_conf['dbname']}"
+    f"postgresql+asyncpg://{env_conf.DB_USER}:{env_conf.DB_PASSWORD}"
+    f"@{env_conf.DB_HOST}:{env_conf.DB_PORT}/{env_conf.DB_NAME}"
 )
 
 engine = create_async_engine(
