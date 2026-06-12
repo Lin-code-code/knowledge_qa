@@ -21,12 +21,14 @@ async def get_uploaded_file_by_md5(
 
 # 保存上传文件的信息到数据库
 async def save_uploaded_file_details(
+        file_id: str,
         filename: str,
         md5_hex: str,
         file_size: int,
         db: AsyncSession
 ) -> UploadedFile:
     new_file = UploadedFile(
+        id=file_id,
         filename=filename,
         md5_hex=md5_hex,
         size=file_size

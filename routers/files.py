@@ -53,17 +53,19 @@ async def upload_and_split(
             raise HTTPException(status_code=400, detail="文件已存在于向量库中！")
         else:
             # 创建向量库服务实例，加载文件并切分存入向量库
-            split_documents = VectorStoreService(chunk_size, chunk_overlap).load_document()
+            split_documents = VectorStoreService(chunk_size, chunk_overlap).load_document(file_id, target_path=temp_path)
 
-            # 保存上传文件的详情到数据库
-            newfile = await save_uploaded_file_details(
-                filename=filename,
-                md5_hex=file_md5_hex,
-                file_size=file.size // 1024,
-                db=db
-            )
         if split_documents is None:
-            return {"message": "文件已存在于向量库中！"}
+            raise HTTPException(status_code=500, detail="文件解析、切分并写入向量库失败")
+
+        # 保存上传文件的详情到数据库
+        newfile = await save_uploaded_file_details(
+            file_id=file_id,
+            filename=filename,
+            md5_hex=file_md5_hex,
+            file_size=file.size // 1024,
+            db=db
+        )
 
         return {
             "message": "文件解析、切分并写入向量库成功",
