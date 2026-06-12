@@ -138,10 +138,9 @@ FastAPI_chunking/
 │
 ├─ rag/                        # RAG 检索
 │  ├─ rag_service.py           # RAG 服务（检索 + 生成）
-│  └─ vector_store.py          # PGVector 文档入库与向量检索
-│
-├─ model/
-│  └─ factory.py               # 聊天/嵌入模型工厂（ChatTongyi, Ollama, SiliconFlow）
+│  ├─ vector_store.py          # PGVector 文档入库与向量检索
+│  └─ model/
+│     └─ factory.py            # 聊天/嵌入模型工厂（ChatTongyi, Ollama, SiliconFlow）
 │
 ├─ config/                     # YAML 配置（不含数据库密码等敏感信息）
 │  ├─ pgvector.yml             # 切分、文件类型、集合名配置
@@ -194,7 +193,7 @@ FastAPI_chunking/
 模型名称由 `config/rag.yml` 控制。如果你切换模型服务，需要同步调整：
 
 - `config/rag.yml`
-- `model/factory.py`
+- `rag/model/factory.py`
 
 ---
 
@@ -431,7 +430,7 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 
 - 提交前先确认配置不会暴露真实密钥
 - 数据库凭据统一放在 `.env`，YAML 配置只放非敏感参数
-- 改模型相关代码时，优先检查 `model/factory.py`
+- 改模型相关代码时，优先检查 `rag/model/factory.py`
 - 改检索与切分逻辑时，优先检查 `rag/vector_store.py`
 - 改业务编排逻辑时，优先检查 `services/`
 - 改提示词时，优先检查 `prompts/rag_summarize.txt`
@@ -494,3 +493,23 @@ uv run pytest tests/
 ## 许可证
 
 MIT License
+
+Copyright (c) 2026
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

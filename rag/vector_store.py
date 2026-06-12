@@ -6,7 +6,7 @@ from core.config import pg_conf, env_conf
 from core.logger import logger
 from utils.file_handler import pdf_loader, txt_loader
 
-from model.factory import get_openai_embed_model
+from rag.model.factory import get_openai_embed_model
 
 class VectorStoreService:
     def __init__(

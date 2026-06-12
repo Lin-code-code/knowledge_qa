@@ -3,7 +3,7 @@ from langchain.agents import create_agent
 
 from agent.tool.agent_tools import get_current_time, rag_summarize
 from agent.tool.middleware import monitor_tool, log_before_model
-from model.factory import get_chat_model
+from rag.model.factory import get_chat_model
 from utils.prompt_loader import load_system_prompts
 
 
