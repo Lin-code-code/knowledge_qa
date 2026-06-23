@@ -1,0 +1,20 @@
+# 连接参数统一从 .env 读取(DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME)
+
+# 向量数据库配置
+table_name_768: rag_documents_768
+table_name_1024: rag_documents_1024
+collection_name_768: vector_768
+collection_name_1024: vector_1024
+
+embedding_dimension_768: 768
+embedding_dimension_1024: 1024
+k: 3
+
+# 数据加载配置
+data_path: data
+allow_knowledge_file_type: ["txt", "pdf"]
+
+# 切分配置
+chunk_size: 200
+chunk_overlap: 20
+separators: ['.', '?', '!', ';', ':', ',', '\n\n', '\n', " ", ""]

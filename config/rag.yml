@@ -1,0 +1,15 @@
+# 阿里云百炼
+chat_model_name: qwen3.7-max
+embedding_model_name: text-embedding-v4
+
+# ollama本地模型
+ol_chat_model_name: qwen3.5:4b
+ol_embedding_model_name: nomic-embed-text-v2-moe:latest     # 768维度
+
+# 硅基流动
+openai_chat_model_name: deepseek-ai/DeepSeek-R1-0528-Qwen3-8B
+openai_embedding_model_name: BAAI/bge-m3                    # 1024维度
+
+# 检索缓存配置
+retrieval_cache_maxsize: 100
+retrieval_cache_ttl: 600

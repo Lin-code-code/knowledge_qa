@@ -24,7 +24,7 @@ class ConversationRepository:
     async def create_conversation(self, user_id: str = "anonymous", title: str = "新对话") -> uuid.UUID:
         conv = Conversation(user_id=user_id, title=title)
         self.session.add(conv)
-        await self.session.commit()
+        await self.session.flush()
         await self.session.refresh(conv)
         return conv.id
 
@@ -75,8 +75,6 @@ class ConversationRepository:
             .values(updated_at=func.now())
         )
 
-        await self.session.commit()
-
     async def list_conversations(self, user_id: str = "anonymous", limit: int = 50, offset: int = 0) -> list:
         stmt = (
             select(Conversation)
@@ -107,7 +105,6 @@ class ConversationRepository:
             return False
 
         await self.session.delete(conv)
-        await self.session.commit()
         return True
 
     @staticmethod

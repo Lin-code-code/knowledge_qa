@@ -1,0 +1,13 @@
+# 对话管理数据库配置
+# 连接参数统一从 .env 读取(DB_HOST/DB_PORT/DB_USER/DB_PASSWORD/DB_NAME)
+
+# 异步连接池配置
+async_pool_size: 10
+async_max_overflow: 10
+pool_recycle: 3600
+pool_pre_ping: true
+
+# 对话管理配置
+max_messages: 30
+max_tokens: 2000
+llm_max_concurrency: 50

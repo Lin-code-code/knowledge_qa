@@ -34,7 +34,7 @@ class ChatService:
         answer = await agent.aexecute(message, history)
 
         rag_service = get_rag_service()
-        sources = rag_service.get_sources(message)
+        sources = rag_service.get_sources()
 
         await self.store.add_messages(conv_uuid, [
             HumanMessage(content=message),

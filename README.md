@@ -123,12 +123,11 @@ FastAPI_chunking/
 │  └─ file_repo.py             # FileRepository（文件记录 CRUD + 向量删除）
 │
 ├─ services/                   # ★ 业务编排层（新增，从 api/ 提取）
-│  ├─ chat_service.py          # ChatService：多轮问答业务流程
-│  └─ document_service.py      # DocumentService：文件上传入库流程
+│  └─ chat_service.py          # ChatService：多轮问答业务流程
 │
 ├─ api/                        # ★ API 层（原 routers/ 重命名 + 瘦身）
 │  ├─ chat.py                  # 问答与会话接口（仅 HTTP 适配）
-│  └─ documents.py             # 文件上传/列表/删除接口
+│  └─ documents.py             # 文件上传/列表/删除接口（直接编排 Repository）
 │
 ├─ agent/                      # 智能代理组件
 │  ├─ react_agent.py           # ReactAgent（LangGraph 实现）
@@ -137,19 +136,19 @@ FastAPI_chunking/
 │     └─ middleware.py         # 工具调用监控与日志
 │
 ├─ rag/                        # RAG 检索
-│  ├─ rag_service.py           # RAG 服务（检索 + 生成）
+│  ├─ rag_service.py           # RAG 服务（检索 + 生成 + TTL 缓存）
 │  ├─ vector_store.py          # PGVector 文档入库与向量检索
 │  └─ model/
 │     └─ factory.py            # 聊天/嵌入模型工厂（ChatTongyi, Ollama, SiliconFlow）
 │
-├─ config/                     # YAML 配置（不含数据库密码等敏感信息）
+├─ config/                     # YAML 配置（已纳入版本管理，不含数据库密码等敏感信息）
 │  ├─ pgvector.yml             # 切分、文件类型、集合名配置
-│  ├─ rag.yml                  # 模型名称配置
+│  ├─ rag.yml                  # 模型名称 + 检索缓存配置
 │  ├─ prompts.yml              # 提示词文件路径
 │  └─ database.yml             # 连接池与对话管理参数
 │
 ├─ utils/                      # 保留工具（未迁移）
-│  ├─ file_handler.py          # 文档读取、MD5 计算
+│  ├─ file_handler.py          # 文档读取（pdf_loader / txt_loader）
 │  └─ prompt_loader.py         # 提示词模板文件加载
 │
 ├─ schemas/
@@ -166,10 +165,7 @@ FastAPI_chunking/
 │
 ├─ data/                       # 上传文件临时目录
 ├─ logs/                       # 运行日志（按天轮转，保留 30 天）
-└─ tests/                      # 测试目录
-   ├─ conftest.py
-   ├─ unit/
-   └─ integration/
+└─ tests/                      # 测试目录（待补充）
 ```
 
 ---
@@ -201,7 +197,7 @@ FastAPI_chunking/
 
 ### 1. `.env` 环境变量（数据库凭据）
 
-数据库连接信息统一从项目根目录的 `.env` 文件读取，**不再存储在 YAML 配置中**：
+数据库连接信息统一从项目根目录的 `.env` 文件读取，**不再存储在 YAML 配置中**（`.env` 已被 `.gitignore` 忽略）：
 
 ```
 HOST=192.168.1.100
@@ -214,6 +210,8 @@ DB=vectordb
 如果使用 SiliconFlow，还需要设置系统环境变量（非 `.env`）：
 
 - `SILICONFLOW_API_KEY`
+
+> 说明：`config/` 目录已纳入版本管理，克隆后即可使用其中的默认参数；仅 `.env` 需按你的环境手动填写。
 
 ### 2. `config/pgvector.yml`
 
@@ -235,12 +233,16 @@ DB=vectordb
 
 ### 4. `config/rag.yml`
 
-该文件主要配置模型名称：
+该文件主要配置模型名称与检索缓存：
 
 - `chat_model_name`
 - `embedding_model_name`
 - `ol_chat_model_name`
 - `ol_embedding_model_name`
+- `openai_chat_model_name`
+- `openai_embedding_model_name`
+- `retrieval_cache_maxsize`：检索结果缓存条目上限（默认 100）
+- `retrieval_cache_ttl`：检索结果缓存过期秒数（默认 600）
 
 ### 5. `config/prompts.yml` 和 `prompts/rag_summarize.txt`
 
@@ -406,10 +408,19 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 1. 用户调用 `api/documents.py` 的 `/api/files/upload`
 2. 文件类型通过 `core/validators.py` 校验
 3. 流式写入 `data/`（边写边算 MD5，避免大文件 OOM）
-4. 写入 MD5 到文件记录表，通过 `db/file_repo.py` 去重
+4. MD5 命中已有记录则拒绝重复入库
 5. 调用 `rag/vector_store.py` 读取文件内容并切分
 6. 切分结果写入 PGVector
-7. 删除临时文件
+7. `FileRepository` 记录文件元数据
+8. 请求结束时由 `get_db()` 统一提交事务；任一步异常则整体回滚
+9. 删除临时文件
+
+### 文件删除流程
+
+1. 调用 `DELETE /api/files/{file_id}`
+2. 先通过 `FileRepository.delete_vector_embeddings` 删除 PGVector 中该文件的向量数据
+3. 再通过 `FileRepository.delete_by_id` 删除文件记录
+4. 上述两步同一事务，任一失败整体回滚，避免产生孤立向量
 
 ### 问答流程
 
@@ -418,9 +429,10 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 3. `db/conversation_repo.py` 读取最近对话历史（含 token 窗口裁剪）
 4. 将对话历史和最新问题传递给 `ReactAgent`
 5. `ReactAgent` 分析意图，自主决定是否调用工具（如通过 `rag_summarize` 检索知识库）
-6. Agent 合成最终回答
-7. 接口同时返回相关知识库来源（Sources）
-8. 用户消息和模型回答写回会话存储
+6. `rag_summarize` 工具执行时，检索结果会被缓存（带 TTL 与容量上限），并记下最新一次检索的文档
+7. Agent 合成最终回答
+8. 接口返回的 `sources` 复用步骤 6 中已检索的文档，不再重复检索
+9. 用户消息和模型回答写回会话存储（事务由 `get_db()` 统一提交）
 
 ---
 
@@ -430,6 +442,7 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 
 - 提交前先确认配置不会暴露真实密钥
 - 数据库凭据统一放在 `.env`，YAML 配置只放非敏感参数
+- **事务边界**：Repository 内部不再单独 `commit`，统一由 `get_db()` 依赖在请求结束时提交；如需在 Service 层组合多步写操作，直接顺序调用各 Repository 方法即可，任一步抛异常会整体回滚
 - 改模型相关代码时，优先检查 `rag/model/factory.py`
 - 改检索与切分逻辑时，优先检查 `rag/vector_store.py`
 - 改业务编排逻辑时，优先检查 `services/`
@@ -444,6 +457,8 @@ uv run python -m py_compile main.py
 ```
 
 ### 运行测试
+
+> 当前 `tests/` 目录待补充。后续新增测试后可运行：
 
 ```powershell
 uv run pytest tests/

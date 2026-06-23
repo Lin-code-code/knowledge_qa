@@ -96,11 +96,14 @@ async def list_uploaded_files(db: AsyncSession = Depends(get_db)):
 async def delete_uploaded_file(file_id: str, db: AsyncSession = Depends(get_db)):
     try:
         repo = FileRepository(db)
+
+        await repo.delete_vector_embeddings(file_id=file_id.replace("-", ""))
+
         deleted = await repo.delete_by_id(file_id=file_id)
-        deleted_count = await repo.delete_vector_embeddings(file_id=file_id.replace("-", ""))
         if not deleted:
             raise HTTPException(status_code=404, detail="文件记录不存在")
-        return {"message": f"文件记录已删除"}
+
+        return {"message": "文件记录已删除"}
     except HTTPException:
         raise
     except Exception as e:
