@@ -4,9 +4,9 @@ from langchain_core.documents import Document
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from rag.vector_store import VectorStoreService
-from utils.prompt_loader import load_rag_prompts
-from rag.model.factory import get_chat_model
-from core.config import rag_conf
+from utils.prompt_loader import load_rag_prompts, load_refusal_template
+from rag.model.factory import get_chat_model, get_reranker, get_openai_chat_model
+from core.config import rag_conf, pg_conf
 from core.logger import logger
 
 
@@ -41,23 +41,61 @@ class RagService:
         self.retriever = self.vector_store.get_retriever()
         self.prompt_text = load_rag_prompts()
         self.prompt = PromptTemplate.from_template(self.prompt_text)
-        self.model = get_chat_model()
+        self.model = get_openai_chat_model()
         self.chain = self._init_chain()
         self._cache = _TTLCache(
             maxsize=rag_conf.get("retrieval_cache_maxsize", 100),
             ttl=rag_conf.get("retrieval_cache_ttl", 600.0),
         )
         self._last_docs: list[Document] = []
+        self._reranker = get_reranker()
+        self._refusal_text = load_refusal_template()
 
     def _init_chain(self):
         chain = self.prompt | self.model | StrOutputParser()
         return chain
 
     def retriever_docs(self, query: str) -> list[Document]:
+        """
+        L1 检索：向量检索宽松召回 → Rerank 精排 → rerank score 阈值过滤 → 取 top_n。
+        不在 rerank 前做向量距离过滤（向量相似度对语义匹配不准，会误删相关文档）。
+        """
         cached = self._cache.get(query)
         if cached is not None:
             return cached
-        docs = self.retriever.invoke(query)
+
+        candidate_k = pg_conf.get("candidate_k", 10)
+        top_n = rag_conf.get("rerank_top_n", pg_conf.get("k", 3))
+        rerank_score_min = rag_conf.get("rerank_score_min", 0.3)
+
+        scored = self.vector_store.search_with_scores(query, k=candidate_k)
+        candidates = [doc for doc, _ in scored]
+        if not candidates:
+            self._cache.set(query, [])
+            return []
+
+        try:
+            rerank_results = self._reranker.rerank(
+                query=query,
+                documents=[doc.page_content for doc in candidates],
+                top_n=top_n,
+            )
+        except Exception as e:
+            logger.error(f"[RagService] rerank 失败，退化为向量检索结果: {str(e)}")
+            docs = candidates[:top_n]
+            self._cache.set(query, docs)
+            return docs
+
+        if not rerank_results:
+            docs = candidates[:top_n]
+            self._cache.set(query, docs)
+            return docs
+
+        docs = [
+            candidates[r["index"]]
+            for r in rerank_results
+            if "index" in r and r.get("relevance_score", 0.0) >= rerank_score_min
+        ]
         self._cache.set(query, docs)
         return docs
 
@@ -69,23 +107,18 @@ class RagService:
         return sources
 
     def rag_summarize(self, query: str) -> str:
+        """
+        检索知识库并返回格式化的原文资料片段，不做 LLM 总结。
+        总结和匹配交由 agent（更强的主模型）完成，避免二次 LLM 调用的不稳定。
+        """
         context_docs = self.retriever_docs(query)
         self._last_docs = context_docs
 
-        context = ""
-        cnt = 0
-        for doc in context_docs:
-            cnt += 1
-            context += f"[参考资料{cnt}]: {doc.page_content} | 参考源数据：{doc.metadata}\n"
+        if not context_docs:
+            return self._refusal_text
 
-        return self.chain.invoke(
-            {
-                "input": query,
-                "context": context
-            }
-        )
+        parts = []
+        for i, doc in enumerate(context_docs):
+            parts.append(f"[参考资料{i+1}]: {doc.page_content}")
+        return "\n".join(parts)
 
-    if __name__ == '__main__':
-        # rag = RagService()
-        # print(rag.rag_summarize("扫地机器人是如何实现自主导航的？"))
-        pass

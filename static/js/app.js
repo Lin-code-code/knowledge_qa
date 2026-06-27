@@ -160,8 +160,8 @@ async function loadUploadedFiles() {
         id: file.id,
         name: file.filename || file.name || '未命名文件',
         size: formatBackendFileSize(file.size),
-        chunks: file.chunks || 0,
-        uploadTime: file.uploaded_at || ''
+        chunks: file.chunks || 0
+        // uploadTime: file.uploaded_at || ''
       }));
     } else {
       state.uploadedFiles = [];
@@ -379,9 +379,10 @@ async function sendMessage() {
 
       if (data.chatId) {
         state.currentChatId = data.chatId;
-        const chatTitle = message.substring(0, 20) + (message.length > 20 ? '...' : '');
+        const isNew = !state.chatHistory.some(c => c.conversation_id === data.chatId);
 
-        if (!state.chatHistory.some(c => c.conversation_id === data.chatId)) {
+        if (isNew) {
+          const chatTitle = message.substring(0, 15) + (message.length > 15 ? '...' : '');
           state.chatHistory.unshift({
             conversation_id: data.chatId,
             title: chatTitle
@@ -389,11 +390,7 @@ async function sendMessage() {
         }
 
         const chat = state.chatHistory.find(c => c.conversation_id === data.chatId);
-        if (chat) {
-          chat.title = chatTitle;
-        }
-
-        document.getElementById('headerTitle').textContent = chatTitle;
+        document.getElementById('headerTitle').textContent = chat ? chat.title : '新对话';
         loadChatHistory();
       }
     } else {

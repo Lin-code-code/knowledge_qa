@@ -10,6 +10,10 @@ embedding_dimension_768: 768
 embedding_dimension_1024: 1024
 k: 3
 
+# 检索阈值过滤配置（L1）
+# candidate_k: 初检候选数（向量检索取该数量后，再做 rerank）
+candidate_k: 10
+
 # 数据加载配置
 data_path: data
 allow_knowledge_file_type: ["txt", "pdf"]

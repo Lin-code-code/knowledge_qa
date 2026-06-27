@@ -7,9 +7,20 @@ ol_chat_model_name: qwen3.5:4b
 ol_embedding_model_name: nomic-embed-text-v2-moe:latest     # 768维度
 
 # 硅基流动
-openai_chat_model_name: deepseek-ai/DeepSeek-R1-0528-Qwen3-8B
+openai_chat_model_name: deepseek-v4-flash
 openai_embedding_model_name: BAAI/bge-m3                    # 1024维度
 
 # 检索缓存配置
 retrieval_cache_maxsize: 100
 retrieval_cache_ttl: 600
+
+# Rerank 配置（SiliconFlow /v1/rerank，复用 SILICONFLOW_API_KEY）
+rerank_model_name: BAAI/bge-reranker-v2-m3
+rerank_top_n: 3
+# rerank_score_min: rerank 相关性分数下限（∈[0,1]，越大越相关；低于此值视为无关丢弃）
+# 实测：强相关 >0.9，弱相关 0.1-0.3，不相关 <0.05
+rerank_score_min: 0.05
+
+# 兜底分类器配置（轻量快速模型，SiliconFlow，复用 SILICONFLOW_API_KEY）
+# 注：Qwen3.5 系列为思考型模型，推理块过长导致超时，改用非思考型 Qwen2.5-7B-Instruct
+guard_model_name: Qwen/Qwen2.5-7B-Instruct

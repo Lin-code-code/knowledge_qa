@@ -1,14 +1,6 @@
-# RAG智能问答系统
+# 服装垂直客服 RAG 问答系统
 
-一个基于 **Python + FastAPI + LangChain + PGVector** 的知识库问答项目。
-
-它支持：
-
-- 上传文档并自动切分入库
-- 基于向量检索的 RAG 问答
-- 多轮对话与会话管理
-- 静态前端页面入口
-- 使用 PostgreSQL + PGVector 作为向量存储
+基于 **Python + FastAPI + LangChain + PGVector** 的服装行业智能问答系统，带三层安全防乱说话架构。
 
 ---
 
@@ -16,6 +8,7 @@
 
 - [项目概览](#项目概览)
 - [功能特性](#功能特性)
+- [三层防乱说话架构](#三层防乱说话架构)
 - [技术栈](#技术栈)
 - [项目结构](#项目结构)
 - [运行要求](#运行要求)
@@ -23,53 +16,56 @@
 - [安装与启动](#安装与启动)
 - [接口说明](#接口说明)
 - [数据流与工作原理](#数据流与工作原理)
-- [开发与贡献](#开发与贡献)
 - [常见问题](#常见问题)
 
 ---
 
 ## 项目概览
 
-`FastAPI_chunking` 的目标是提供一套可扩展的知识库问答后端：
+`FastAPI_chunking` 是一套服装行业垂直客服系统，支持上传知识文件、向量检索、多轮问答，并内置三层安全机制防止大模型胡说八道：
 
-1. 用户上传知识文件
-2. 系统读取文件并按配置切分文本
-3. 切分后的内容写入 PGVector
-4. 用户提问时，系统先检索相关知识片段
-5. 将检索结果交给大模型生成回答
-
-项目采用分层架构（API → Service → Repository），职责清晰，适合作为：
-
-- RAG 项目样板
-- FastAPI + PostgreSQL 向量库实践项目
-- 企业内部知识问答系统原型
+1. 用户上传服装知识文件（尺码表、洗护说明、面料介绍等）
+2. 系统读取文件并按配置切分文本，写入 PGVector
+3. 用户提问时，先经 L0 域内预检判定是否属于服装领域
+4. 越界问题直接拒答（不入库、不调 Agent）
+5. 域内问题经向量检索 + Rerank 精排后交给 Agent 生成回答
+6. 回答经 L3 分类器兜底，越界输出替换为统一拒答话术
 
 ---
 
 ## 功能特性
 
+### 三层防乱说话
+
+| 层级 | 名称 | 位置 | 作用 |
+|------|------|------|------|
+| L0  | 域内预检 | Agent 执行前 | 代码级拦截越界问题，不入库不调 Agent |
+| L1  | 检索阈值+Rerank | 检索阶段 | 向量宽松召回 → Rerank 精排 → score 阈值过滤 |
+| L2  | Prompt 约束 | Agent prompt | 领域边界 + 越界清单 + few-shot 示例 |
+| L3  | 兜底分类器 | Agent 执行后 | 独立模型检查回答合规性，越界替换拒答模板 |
+
 ### 文档上传与入库
 
-- 支持上传知识文件
-- 目前默认支持 `txt`、`pdf`
+- 支持上传知识文件（默认 `txt`、`pdf`）
 - 上传后先保存到 `data/` 目录
 - 使用 `RecursiveCharacterTextSplitter` 自动切分
 - 切分结果写入 PGVector
 - 使用 MD5 记录做去重，避免重复入库
-- 前端文件列表仅展示后端接口返回结果
+- 前端文件列表展示文件名、大小、片段数
 
 ### 知识库问答
 
-- 基于向量检索召回相关内容
+- 基于向量检索 + Rerank 精排召回相关内容
 - 支持基于 ReactAgent 代理模式进行意图识别和工具调用
-- 使用提示词模板组织回答
-- 支持多轮对话上下文
+- 使用提示词模板组织回答（RAG 原文返回，Agent 自行分析匹配）
+- 支持多轮对话上下文（自动过滤历史拒答记录）
+- 检索结果带缓存（可配置 TTL 与容量上限）
 - 支持返回会话 ID，便于前端继续追问
 
 ### 会话管理
 
-- 创建会话
-- 获取会话列表
+- 越界提问不创建会话、不入库
+- 创建会话、获取会话列表
 - 获取某个会话的消息列表
 - 删除会话及其消息
 
@@ -80,6 +76,45 @@
 
 ---
 
+## 三层防乱说话架构
+
+```
+用户提问
+    │
+    ▼
+┌─────────────────────────────┐
+│  L0 域内预检 (GuardService)  │  ← 轻量模型 Qwen2.5-7B (SiliconFlow)
+│  YES/NO 分类                │     解析失败默认放行
+│  越界 → 直接返回拒答，不入库   │
+└─────────────┬───────────────┘
+              │ 域内
+              ▼
+┌─────────────────────────────┐
+│  L1 检索 + Rerank            │
+│  candidate_k → Rerank 精排   │
+│  rerank_score >= 0.05 过滤   │
+└─────────────┬───────────────┘
+              │ 检索结果
+              ▼
+┌─────────────────────────────┐
+│  L2 ReactAgent (qwen3.7-max) │  ← ChatTongyi (DashScope)
+│  Prompt 约束领域边界 + 越界清单 │     含 4 条 few-shot 示例
+│  工具: rag_summarize         │
+└─────────────┬───────────────┘
+              │ Agent 回答
+              ▼
+┌─────────────────────────────┐
+│  L3 分类器 (GuardService)     │  ← 轻量模型 Qwen2.5-7B (SiliconFlow)
+│  IN/OUT/REFUSE 三分类        │     解析失败默认放行
+│  越界 (OUT) → 替换拒答模板    │
+└─────────────┬───────────────┘
+              │ 最终回答
+              ▼
+           用户
+```
+
+---
+
 ## 技术栈
 
 - **Python** >= 3.13
@@ -87,13 +122,15 @@
 - **Uvicorn**：ASGI 服务器
 - **SQLAlchemy** + **asyncpg**：异步数据库访问
 - **PostgreSQL + PGVector**：向量存储
-- **LangChain & LangGraph**：Agent编排与大模型调度
+- **LangChain & LangGraph**：Agent 编排与大模型调度
 - **LangChain Community / LangChain PGVector**：模型与向量相关能力
-- **DashScope (ChatTongyi)**：默认聊天模型
-- **SiliconFlow OpenAI API**：默认嵌入模型（OpenAIEmbeddings）
+- **DashScope (ChatTongyi)**：主聊天模型
+- **SiliconFlow**：Rerank 模型 + 嵌入模型 + Guard 轻量模型
+- **DeepSeek**：RAG 总结模型
 - **Ollama**：可选本地模型/嵌入
 - **PyYAML**：YAML 配置加载
 - **PyPDF**：PDF 解析
+- **httpx**：Rerank HTTP 客户端
 
 ---
 
@@ -105,29 +142,30 @@ FastAPI_chunking/
 ├─ pyproject.toml              # 项目依赖与构建配置
 ├─ uv.lock                     # uv 锁定文件
 │
-├─ core/                       # ★ 基础设施（原 utils/ 拆分）
+├─ core/                       # 基础设施
 │  ├─ config.py                # EnvConfig + 懒加载 YAML 配置
 │  ├─ logger.py                # 日志封装（控制台 + 按天轮转文件）
 │  ├─ paths.py                 # 路径工具（项目根目录发现）
 │  └─ validators.py            # 通用校验函数（文件扩展名等）
 │
-├─ models/                     # ★ ORM 模型（原 history/models 拆分）
+├─ models/                     # ORM 模型
 │  ├─ base.py                  # DeclarativeBase
 │  ├─ conversation.py          # Conversation + Message
 │  └─ uploaded_file.py         # UploadedFile
 │
-├─ db/                         # ★ 数据访问层（原 history/db/）
+├─ db/                         # 数据访问层
 │  ├─ engine.py                # 异步数据库引擎与 session 工厂
 │  ├─ session.py               # get_db() / close_db() 依赖注入
 │  ├─ conversation_repo.py     # ConversationRepository（会话 CRUD）
 │  └─ file_repo.py             # FileRepository（文件记录 CRUD + 向量删除）
 │
-├─ services/                   # ★ 业务编排层（新增，从 api/ 提取）
-│  └─ chat_service.py          # ChatService：多轮问答业务流程
+├─ services/                   # 业务编排层
+│  ├─ chat_service.py          # ChatService：L0 预检 + Agent + L3 兜底
+│  └─ guard_service.py         # GuardService：L0 域内预检 + L3 输出分类器
 │
-├─ api/                        # ★ API 层（原 routers/ 重命名 + 瘦身）
-│  ├─ chat.py                  # 问答与会话接口（仅 HTTP 适配）
-│  └─ documents.py             # 文件上传/列表/删除接口（直接编排 Repository）
+├─ api/                        # API 层
+│  ├─ chat.py                  # 问答与会话接口
+│  └─ documents.py             # 文件上传/列表/删除接口
 │
 ├─ agent/                      # 智能代理组件
 │  ├─ react_agent.py           # ReactAgent（LangGraph 实现）
@@ -135,28 +173,32 @@ FastAPI_chunking/
 │     ├─ agent_tools.py        # Agent 工具（rag_summarize, 时间查询）
 │     └─ middleware.py         # 工具调用监控与日志
 │
-├─ rag/                        # RAG 检索
-│  ├─ rag_service.py           # RAG 服务（检索 + 生成 + TTL 缓存）
+├─ rag/                        # RAG 检索与模型工厂
+│  ├─ rag_service.py           # RAG 服务（检索 + Rerank + TTL 缓存）
 │  ├─ vector_store.py          # PGVector 文档入库与向量检索
 │  └─ model/
-│     └─ factory.py            # 聊天/嵌入模型工厂（ChatTongyi, Ollama, SiliconFlow）
+│     ├─ factory.py            # 聊天/Rerank/嵌入/Guard 模型工厂
+│     └─ reranker.py           # SiliconFlow /v1/rerank HTTP 客户端
 │
-├─ config/                     # YAML 配置（已纳入版本管理，不含数据库密码等敏感信息）
-│  ├─ pgvector.yml             # 切分、文件类型、集合名配置
-│  ├─ rag.yml                  # 模型名称 + 检索缓存配置
-│  ├─ prompts.yml              # 提示词文件路径
+├─ config/                     # YAML 配置（已纳入版本管理）
+│  ├─ pgvector.yml             # 切分、文件类型、集合名、检索候选数
+│  ├─ rag.yml                  # 模型名称 + Rerank/Guard 配置 + 缓存
+│  ├─ prompts.yml              # 所有提示词文件路径
 │  └─ database.yml             # 连接池与对话管理参数
 │
-├─ utils/                      # 保留工具（未迁移）
+├─ utils/                      # 工具函数
 │  ├─ file_handler.py          # 文档读取（pdf_loader / txt_loader）
-│  └─ prompt_loader.py         # 提示词模板文件加载
+│  └─ prompt_loader.py         # 提示词模板文件加载（含 guard/scope）
 │
 ├─ schemas/
 │  └─ chat.py                  # Pydantic 请求/响应模型
 │
-├─ prompts/
-│  ├─ main_prompt.txt          # Agent 系统提示词
-│  └─ rag_summarize.txt        # RAG 摘要提示词模板
+├─ prompts/                    # 提示词模板
+│  ├─ main_prompt.txt          # Agent 系统提示词（服装垂直客服）
+│  ├─ rag_summarize.txt        # RAG 检索提示词
+│  ├─ guard_prompt.txt         # L3 分类器 prompt
+│  ├─ scope_check_prompt.txt   # L0 域内预检 prompt
+│  └─ refusal_template.txt     # 统一拒答话术
 │
 ├─ static/                     # 前端静态文件
 │  ├─ index.html               # SPA 入口
@@ -175,29 +217,32 @@ FastAPI_chunking/
 ### 基础环境
 
 - Python 3.13+
-- PostgreSQL 数据库
-- 已启用 PGVector 扩展
-- 可访问的模型服务（DashScope 或 SiliconFlow）
+- PostgreSQL 数据库（需手动启用 PGVector 扩展）
+- 可访问的模型服务（DashScope / SiliconFlow / DeepSeek）
+
+### 数据库准备
+
+```powershell
+psql -h <host> -U <user> -d <dbname> -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+> **注意**：ORM 表（`conversations`、`messages`、`uploaded_files`）不会自动创建，需手动执行 DDL 或使用 `scripts/data_test.sql`。`langchain_pg_embedding` 和 `langchain_pg_collection` 由 PGVector 自行创建。
 
 ### 模型依赖
 
-当前代码默认使用：
-
-- `ChatTongyi` 作为聊天模型（DashScope）
-- `OpenAIEmbeddings` 作为嵌入模型（SiliconFlow API）
-
-模型名称由 `config/rag.yml` 控制。如果你切换模型服务，需要同步调整：
-
-- `config/rag.yml`
-- `rag/model/factory.py`
+| 用途 | 模型 | 服务商 | API Key 来源 |
+|------|------|--------|-------------|
+| 主 Agent | `qwen3.7-max` | DashScope | 阿里云百炼 KEY |
+| 嵌入 | `BAAI/bge-m3` | SiliconFlow | `SILICONFLOW_API_KEY`（系统环境变量） |
+| Rerank | `BAAI/bge-reranker-v2-m3` | SiliconFlow | 复用 `SILICONFLOW_API_KEY` |
+| L0/L3 Guard | `Qwen/Qwen2.5-7B-Instruct` | SiliconFlow | 复用 `SILICONFLOW_API_KEY` |
+| RAG 总结 | `deepseek-v4-flash` | DeepSeek | `DEEPSEEK_API_KEY`（系统环境变量） |
 
 ---
 
 ## 配置说明
 
-### 1. `.env` 环境变量（数据库凭据）
-
-数据库连接信息统一从项目根目录的 `.env` 文件读取，**不再存储在 YAML 配置中**（`.env` 已被 `.gitignore` 忽略）：
+### 1. `.env` 文件（数据库凭据，已 .gitignore）
 
 ```
 HOST=192.168.1.100
@@ -207,66 +252,43 @@ PASSWORD=your_password
 DB=vectordb
 ```
 
-如果使用 SiliconFlow，还需要设置系统环境变量（非 `.env`）：
+字段别名（大小写不敏感）：`HOST`/`DB_HOST`/`host`、`PORT`、`USER`/`DB_USER`、`PASSWORD`/`DB_PASSWORD`、`DB`/`DB_NAME`/`database`/`dbname`。
 
-- `SILICONFLOW_API_KEY`
+### 2. 系统环境变量
 
-> 说明：`config/` 目录已纳入版本管理，克隆后即可使用其中的默认参数；仅 `.env` 需按你的环境手动填写。
+- `SILICONFLOW_API_KEY`：用于嵌入、Rerank、Guard 模型（**不能放 `.env`**）
+- `DEEPSEEK_API_KEY`：用于 RAG 总结模型
 
-### 2. `config/pgvector.yml`
+### 3. `config/pgvector.yml`
 
-该文件控制文档切分与向量存储行为：
-
-- `collection_name_768` / `collection_name_1024`
-- `data_path`
-- `allow_knowledge_file_type`
-- `chunk_size` / `chunk_overlap`
-- `separators`
-- `k`（检索返回数量）
-
-### 3. `config/database.yml`
-
-该文件用于会话与文件记录的异步连接池参数：
-
-- `async_pool_size` / `async_max_overflow` / `pool_recycle` / `pool_pre_ping`
-- `max_messages` / `max_tokens`
+- `candidate_k`：初检候选数（默认 10），向量检索取该数量后做 Rerank
+- `collection_name_768` / `collection_name_1024`：向量集合名
+- `data_path`：上传文件临时目录
+- `allow_knowledge_file_type`：允许的文件类型（默认 `["txt", "pdf"]`）
+- `chunk_size` / `chunk_overlap`：文本切分参数
+- `separators`：切分分隔符
+- `k`：检索返回数量（默认 3）
 
 ### 4. `config/rag.yml`
 
-该文件主要配置模型名称与检索缓存：
+- `chat_model_name`：Agent 主模型（默认 `qwen3.7-max`，DashScope）
+- `openai_chat_model_name`：RAG 总结模型（默认 `deepseek-v4-flash`，DeepSeek）
+- `rerank_model_name` / `rerank_top_n` / `rerank_score_min`：Rerank 配置
+- `guard_model_name`：L0/L3 轻量模型（默认 `Qwen/Qwen2.5-7B-Instruct`，SiliconFlow）
+- `retrieval_cache_maxsize` / `retrieval_cache_ttl`：检索结果缓存
 
-- `chat_model_name`
-- `embedding_model_name`
-- `ol_chat_model_name`
-- `ol_embedding_model_name`
-- `openai_chat_model_name`
-- `openai_embedding_model_name`
-- `retrieval_cache_maxsize`：检索结果缓存条目上限（默认 100）
-- `retrieval_cache_ttl`：检索结果缓存过期秒数（默认 600）
+### 5. `config/database.yml`
 
-### 5. `config/prompts.yml` 和 `prompts/rag_summarize.txt`
+- `async_pool_size` / `async_max_overflow` / `pool_recycle` / `pool_pre_ping`
+- `max_messages` / `max_tokens` / `llm_max_concurrency`
 
-- `config/prompts.yml` 指定提示词文件路径
-- `prompts/rag_summarize.txt` 是 RAG 生成模板
+### 6. `config/prompts.yml`
 
-模板会注入：
-
-- 用户问题 `{input}`
-- 检索上下文 `{context}`
+所有提示词文件路径：`main_prompt_path`、`rag_summarize_prompt_path`、`guard_prompt_path`、`scope_check_prompt_path`、`refusal_template_path`。
 
 ---
 
 ## 安装与启动
-
-### 数据库初始化
-
-确保 PostgreSQL 已启用 PGVector 扩展：
-
-```powershell
-psql -h <host> -U <user> -d <dbname> -c "CREATE EXTENSION IF NOT EXISTS vector;"
-```
-
-应用启动后，ORM 模型会自动创建 `conversations`、`messages`、`uploaded_files` 表（需确保数据库用户有建表权限）。
 
 ### 方式一：使用 `uv`（推荐）
 
@@ -288,7 +310,6 @@ uvicorn main:app --reload
 
 - 前端页面：`http://127.0.0.1:8000/`
 - OpenAPI 文档：`http://127.0.0.1:8000/docs`
-- ReDoc：`http://127.0.0.1:8000/redoc`
 
 ---
 
@@ -304,19 +325,13 @@ uvicorn main:app --reload
 - `chunk_size`：可选，默认取配置
 - `chunk_overlap`：可选，默认取配置
 
-示例：
-
-```powershell
-curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_document.pdf"
-```
-
 返回示例：
 
 ```json
 {
   "message": "文件解析、切分并写入向量库成功",
   "filename": "your_document.pdf",
-  "chunks": [],
+  "chunks": 15,
   "file_id": "uuid"
 }
 ```
@@ -331,48 +346,23 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 {
   "files": [
     {
-      "id": "uuid",
-      "filename": "your_document.pdf",
-      "size": 123,
-      "uploaded_at": "2026-05-28T02:40:10.399516+00:00",
-      "md5_hex": "..."
+      "id": "d8e8a22d-8568-4fa2-b2c5-0183cf6b7089",
+      "filename": "洗涤养护.txt",
+      "size": 6,
+      "chunk_count": 17,
+      "uploaded_at": "2026-05-28T02:40:10.399516+00:00"
     }
   ]
 }
 ```
 
-> `size` 为 KB。前端根据该值换算显示。
+> `size` 单位为 KB，`chunk_count` 为该文件的向量片段数（INNER JOIN `langchain_pg_embedding` 统计）。前端根据这些值换算显示。
 
 ### 删除文件记录
 
 **DELETE** `/api/files/{file_id}`
 
-返回示例：
-
-```json
-{
-  "message": "文件记录已删除"
-}
-```
-
-### 创建会话
-
-**POST** `/api/conversations`
-
-```json
-{
-  "user_id": "anonymous",
-  "title": "新对话"
-}
-```
-
-### 获取会话列表
-
-**GET** `/api/conversations?user_id=anonymous`
-
-### 获取会话消息
-
-**GET** `/api/chat/{conversation_id}/messages`
+先删除 PGVector 中该文件的向量数据，再删除文件记录，同一事务保证原子性。
 
 ### 多轮问答
 
@@ -380,7 +370,7 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 
 ```json
 {
-  "message": "扫地机器人是如何实现自主导航的？",
+  "message": "纯棉T恤怎么洗不容易缩水？",
   "chatId": null
 }
 ```
@@ -389,15 +379,22 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 
 ```json
 {
-  "answer": "...",
-  "sources": [],
-  "chatId": "..."
+  "answer": "建议冷水手洗，避免高温烘干...",
+  "sources": ["纯棉洗涤.txt"],
+  "chatId": "uuid"
 }
 ```
 
-### 删除会话
+> L0 越界拦截：域外问题直接返回拒答话术，不创建会话、不入库。
 
-**DELETE** `/api/chat/{chat_id}`
+### 其他接口
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/conversations` | 创建会话 |
+| GET | `/api/conversations?user_id=anonymous` | 获取会话列表 |
+| GET | `/api/chat/{conversation_id}/messages` | 获取会话消息 |
+| DELETE | `/api/chat/{chat_id}` | 删除会话 |
 
 ---
 
@@ -405,64 +402,31 @@ curl.exe -X POST "http://127.0.0.1:8000/api/files/upload" -F "file=@your_documen
 
 ### 文档入库流程
 
-1. 用户调用 `api/documents.py` 的 `/api/files/upload`
+1. 用户调用 `POST /api/files/upload`
 2. 文件类型通过 `core/validators.py` 校验
-3. 流式写入 `data/`（边写边算 MD5，避免大文件 OOM）
+3. 流式写入 `data/` 临时文件，同时计算 MD5
 4. MD5 命中已有记录则拒绝重复入库
-5. 调用 `rag/vector_store.py` 读取文件内容并切分
-6. 切分结果写入 PGVector
-7. `FileRepository` 记录文件元数据
-8. 请求结束时由 `get_db()` 统一提交事务；任一步异常则整体回滚
-9. 删除临时文件
+5. 调用 `VectorStoreService.load_document()` 读取文件、切分、写入 PGVector
+6. `FileRepository` 记录文件元数据
+7. 请求结束时由 `get_db()` 统一提交事务；任一步异常则整体回滚
+8. 删除临时文件
+
+### 问答流程
+
+1. 用户调用 `POST /api/chat/`
+2. **L0 预检**：`GuardService.check_question_scope()` 用轻量模型判定问题是否属于服装领域；越界直接返回拒答，不入库、不创建会话
+3. 域内问题：创建/获取会话，获取最近历史（自动过滤拒答问答对）
+4. **L1 检索**：`RagService.retriever_docs()` 向量召回 candidate_k → Rerank 精排 → rerank_score >= rerank_score_min 过滤
+5. **L2 Agent**：`ReactAgent` 接收历史 + 问题，通过 `rag_summarize` 工具获取原文资料（不做 LLM 总结），自行分析匹配回答
+6. **L3 兜底**：Agent 回答经 `GuardService.check()` 检查，越界（OUT）替换为统一拒答模板
+7. 返回 `(answer, sources, chatId)`，消息写入历史（由 `get_db()` 统一提交）
 
 ### 文件删除流程
 
 1. 调用 `DELETE /api/files/{file_id}`
-2. 先通过 `FileRepository.delete_vector_embeddings` 删除 PGVector 中该文件的向量数据
-3. 再通过 `FileRepository.delete_by_id` 删除文件记录
-4. 上述两步同一事务，任一失败整体回滚，避免产生孤立向量
-
-### 问答流程
-
-1. 用户调用 `api/chat.py` 的 `/api/chat/`
-2. `services/chat_service.py` 编排业务流程
-3. `db/conversation_repo.py` 读取最近对话历史（含 token 窗口裁剪）
-4. 将对话历史和最新问题传递给 `ReactAgent`
-5. `ReactAgent` 分析意图，自主决定是否调用工具（如通过 `rag_summarize` 检索知识库）
-6. `rag_summarize` 工具执行时，检索结果会被缓存（带 TTL 与容量上限），并记下最新一次检索的文档
-7. Agent 合成最终回答
-8. 接口返回的 `sources` 复用步骤 6 中已检索的文档，不再重复检索
-9. 用户消息和模型回答写回会话存储（事务由 `get_db()` 统一提交）
-
----
-
-## 开发与贡献
-
-欢迎提交 Issue 和 Pull Request。建议遵循以下原则：
-
-- 提交前先确认配置不会暴露真实密钥
-- 数据库凭据统一放在 `.env`，YAML 配置只放非敏感参数
-- **事务边界**：Repository 内部不再单独 `commit`，统一由 `get_db()` 依赖在请求结束时提交；如需在 Service 层组合多步写操作，直接顺序调用各 Repository 方法即可，任一步抛异常会整体回滚
-- 改模型相关代码时，优先检查 `rag/model/factory.py`
-- 改检索与切分逻辑时，优先检查 `rag/vector_store.py`
-- 改业务编排逻辑时，优先检查 `services/`
-- 改提示词时，优先检查 `prompts/rag_summarize.txt`
-- 扩展接口时，记得同步更新 `schemas/chat.py`
-- 新增 API 端点时，路由写在 `api/`，业务逻辑写在 `services/`
-
-如果你准备贡献代码，建议先在本地完成：
-
-```powershell
-uv run python -m py_compile main.py
-```
-
-### 运行测试
-
-> 当前 `tests/` 目录待补充。后续新增测试后可运行：
-
-```powershell
-uv run pytest tests/
-```
+2. 先删除 PGVector 中该文件的向量数据
+3. 再删除 `uploaded_files` 记录
+4. 同一事务，保证原子性，避免孤立向量
 
 ---
 
@@ -471,37 +435,32 @@ uv run pytest tests/
 ### 1. 上传文件后没有效果怎么办？
 
 先检查：
-
 - 文件类型是否在 `allow_knowledge_file_type` 里
 - `data/` 是否可写
-- PostgreSQL 是否连通
-- PGVector 是否可用
-- 模型服务是否启动
+- PostgreSQL 是否连通、PGVector 是否可用
+- 模型服务接口是否可达
 
 ### 2. 问答接口报错怎么办？
 
 常见原因：
-
 - 数据库连接失败
 - 模型名称配置错误
-- 嵌入模型不可用
-- `chatId` 或 `conversation_id` 格式不合法
+- `SILICONFLOW_API_KEY` 或 `DEEPSEEK_API_KEY` 未设置
+- `chatId` 格式不合法
 
-### 3. 向量检索报错或无结果怎么办？
+### 3. 域内问题被误拦截怎么办？
 
-常见原因：
-
-- 未设置 `SILICONFLOW_API_KEY`（系统环境变量）
-- `config/rag.yml` 中嵌入模型名称不可用
-- `.env` 中数据库连接参数不正确
+- L0 误拦：检查 `prompts/scope_check_prompt.txt` 正面示例是否覆盖该场景，或调整 `_parse_scope_label` 优先级
+- L1 文档不足：降低 `rerank_score_min`（当前 0.05），或增加知识库文档
+- L3 误杀：检查 `prompts/guard_prompt.txt` 示例，或调整 `rerank_score_min`
 
 ### 4. 为什么会看到 `304 Not Modified`？
 
-这是浏览器缓存命中，表示静态资源没有变化，属于正常现象。更新静态资源后可使用强制刷新。
+这是浏览器缓存命中，表示静态资源没有变化。更新静态资源后使用强制刷新（`Ctrl+Shift+R`）。
 
-### 5. 为什么关闭应用时会执行数据库关闭？
+### 5. 表结构需要手动创建吗？
 
-`main.py` 使用了 FastAPI `lifespan`，应用退出时会调用 `db.session.close_db()` 来释放数据库资源。
+是的。`conversations`、`messages`、`uploaded_files` 需手动执行 DDL。`langchain_pg_embedding` 和 `langchain_pg_collection` 由 PGVector 自动创建。参考 `scripts/data_test.sql`。
 
 ---
 
@@ -510,21 +469,3 @@ uv run pytest tests/
 MIT License
 
 Copyright (c) 2026
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.

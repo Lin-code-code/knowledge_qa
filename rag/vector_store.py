@@ -42,6 +42,13 @@ class VectorStoreService:
     def get_retriever(self):
         return self.vector_store.as_retriever(search_kwargs={"k": pg_conf["k"]})
 
+    def search_with_scores(self, query: str, k: int) -> list[tuple[Document, float]]:
+        """
+        带距离分数的向量检索。
+        PGVector 返回 (Document, distance)，distance 为余弦距离 ∈ [0,2]，越小越相似。
+        """
+        return self.vector_store.similarity_search_with_score(query, k=k)
+
     def load_document(self, file_id: str, target_path: str):
         """
             加载当个文件

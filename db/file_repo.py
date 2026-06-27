@@ -1,4 +1,3 @@
-from typing import Sequence, Any
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, delete, text
 from models.uploaded_file import UploadedFile
@@ -20,10 +19,23 @@ class FileRepository:
         await self.session.refresh(new_file)
         return new_file
 
-    async def list_all(self) -> Sequence[UploadedFile]:
-        stmt = select(UploadedFile).order_by(UploadedFile.uploaded_at.desc())
-        result = await self.session.execute(stmt)
-        return result.scalars().all()
+    async def list_all(self) -> list[dict]:
+        sql_query = text("""
+            SELECT
+                uf.id,
+                uf.filename,
+                uf.size,
+                COUNT(*) AS chunks
+            FROM uploaded_files uf
+            JOIN langchain_pg_embedding lpe
+                ON (REPLACE(uf.id::TEXT, '-', '')) = (lpe.cmetadata ->> 'file_id')
+            WHERE lpe.cmetadata ? 'file_id'
+            GROUP BY uf.id, uf.filename, uf.size
+            ORDER BY chunks DESC
+        """)
+        result = await self.session.execute(sql_query)
+        rows = result.mappings().all()
+        return [dict(row) for row in rows]
 
     async def delete_by_id(self, file_id: str) -> bool:
         stmt = delete(UploadedFile).where(UploadedFile.id == file_id).returning(UploadedFile.id)

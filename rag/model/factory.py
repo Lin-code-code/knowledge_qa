@@ -12,6 +12,14 @@ def get_chat_model() -> BaseChatModel:
     return ChatTongyi(model=rag_conf["chat_model_name"])
 
 
+def get_guard_model() -> BaseChatModel:
+    return ChatOpenAI(
+        model=rag_conf["guard_model_name"],
+        base_url="https://api.siliconflow.cn/v1",
+        api_key=os.environ.get("SILICONFLOW_API_KEY"),
+    )
+
+
 def get_embed_model() -> OllamaEmbeddings:
     return OllamaEmbeddings(model=rag_conf["ol_embedding_model_name"], base_url="http://127.0.0.1:11434")
 
@@ -19,8 +27,8 @@ def get_embed_model() -> OllamaEmbeddings:
 def get_openai_chat_model() -> ChatOpenAI:
     return ChatOpenAI(
         model=rag_conf["openai_chat_model_name"],
-        base_url="https://api.siliconflow.cn/v1",
-        api_key=os.environ.get('SILICONFLOW_API_KEY')
+        base_url="https://api.deepseek.com",
+        api_key=os.environ.get('DEEPSEEK_API_KEY')
     )
 
 
@@ -31,6 +39,11 @@ def get_openai_embed_model() -> OpenAIEmbeddings:
         api_key=os.environ.get('SILICONFLOW_API_KEY'),
         chunk_size=64
     )
+
+
+def get_reranker():
+    from rag.model.reranker import RerankClient
+    return RerankClient()
 
 if __name__ == '__main__':
     res = get_openai_embed_model().embed_query("今天天气如何？")
