@@ -14,8 +14,6 @@ def get_rewrite_agent() -> "RewriteAgent":
 
 
 class RewriteAgent:
-    """query 改写 agent：把用户口语化提问改写为向量检索关键词（进程级单例）。"""
-
     def __init__(self):
         self.agent = create_agent(
             model=get_ollama_chat_model(),

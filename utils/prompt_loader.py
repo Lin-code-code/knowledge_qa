@@ -75,3 +75,18 @@ def load_scope_check_prompt():
     except Exception as e:
         logger.error(f"[load_scope_check_prompt]解析域内分类器提示词出错，{str(e)}")
         raise e
+
+
+def load_retrieval_prompt():
+    try:
+        retrieval_path = get_abs_path(prompts_conf["retrieval_prompt_path"])
+    except KeyError as e:
+        logger.error(f"[load_retrieval_prompt]在yaml配置中没有retrieval_prompt_path配置项")
+        raise e
+
+    try:
+        with open(retrieval_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        logger.error(f"[load_retrieval_prompt]解析检索 agent prompt 出错，{str(e)}")
+        raise e

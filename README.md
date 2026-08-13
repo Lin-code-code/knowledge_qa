@@ -173,6 +173,7 @@ FastAPI_chunking/
 ├─ agent/                      # 智能代理组件
 │  ├─ react_agent.py           # ReactAgent（LangGraph 实现）
 │  ├─ rewrite_agent.py         # RewriteAgent（query 改写，create_agent 封装）
+│  ├─ retrieval_agent.py       # RetrievalAgent（向量检索+Rerank，create_agent 封装）
 │  └─ tool/
 │     ├─ agent_tools.py        # Agent 工具（rag_summarize, 时间查询）
 │     └─ middleware.py         # 工具调用监控与日志
@@ -241,6 +242,7 @@ psql -h <host> -U <user> -d <dbname> -c "CREATE EXTENSION IF NOT EXISTS vector;"
 | 用途 | 模型 | 服务商 | 接入方式 |
 |------|------|--------|---------|
 | 主 Agent（L2） | `deepseek-v4-flash` | DeepSeek | `DEEPSEEK_API_KEY`（系统环境变量） |
+| 检索 Agent（L1） | `deepseek-v4-flash` | DeepSeek | 复用 `DEEPSEEK_API_KEY` |
 | 嵌入 | `BAAI/bge-m3` | SiliconFlow | `SILICONFLOW_API_KEY`（系统环境变量） |
 | Rerank | `BAAI/bge-reranker-v2-m3` | SiliconFlow | 复用 `SILICONFLOW_API_KEY` |
 | L0/L3 Guard | `qwen3.5:4b` | Ollama（本地） | 需本地启动 Ollama（`localhost:11434`） |
@@ -428,7 +430,7 @@ uvicorn main:app --reload
 1. 用户调用 `POST /api/chat/`
 2. **L0 预检**：`GuardService.check_question_scope()` 用轻量模型判定问题是否属于服装领域；越界直接返回拒答，不入库、不创建会话
 3. 已有会话则获取最近历史（自动过滤拒答问答对；`agent_history_turns=0` 时实际不传给 agent）
-4. **L1 检索**：`RagService.retriever_docs()` 向量召回 candidate_k → Rerank 精排 → rerank_score >= rerank_score_min 过滤
+4. **L1 检索**：`RetrievalAgent.retrieve()`（create_agent，工具 `vector_search` 宽松召回 candidate_k → `rerank` 精排 → rerank_score >= rerank_score_min 过滤；LLM 只驱动工具调用，文档经 contextvar 回传；agent 失败降级为向量 top_n）
 5. **L2 Agent**：`ReactAgent` 接收历史 + 问题，通过 `rag_summarize` 工具获取原文资料（不做 LLM 总结），自行分析匹配回答；检索到的来源在请求内收集（contextvar，按请求隔离）
 6. **L3 兜底**：Agent 回答经 `GuardService.check()` 检查，越界（OUT）替换为统一拒答模板，且**不创建会话、不入库**
 7. L3 放行后才创建/复用会话，返回 `(answer, sources, chatId)`，消息写入历史（由 `get_db()` 统一提交）

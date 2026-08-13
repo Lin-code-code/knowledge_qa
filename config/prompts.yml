@@ -3,3 +3,4 @@ guard_prompt_path: prompts/guard_prompt.txt
 refusal_template_path: prompts/refusal_template.txt
 scope_check_prompt_path: prompts/scope_check_prompt.txt
 query_rewrite_prompt_path: prompts/query_rewrite_prompt.txt
+retrieval_prompt_path: prompts/retrieval_prompt.txt
