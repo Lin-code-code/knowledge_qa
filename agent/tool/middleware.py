@@ -1,5 +1,5 @@
 from typing import Callable, Awaitable
-from langchain.agents.middleware import wrap_tool_call, before_model, dynamic_prompt, ModelRequest
+from langchain.agents.middleware import wrap_tool_call, before_model
 from langchain.tools.tool_node import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langchain.agents import AgentState
@@ -28,9 +28,6 @@ async def monitor_tool(
             result = await result
 
         logger.info(f"[monitor_tool]工具{tool_name}调用成功")
-
-        if tool_name == "fill_context_for_report":
-            request.runtime.context["report"] = True
 
         return result
     except Exception as e:

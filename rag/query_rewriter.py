@@ -1,13 +1,13 @@
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
-from rag.model.factory import get_guard_model
+from rag.model.factory import get_ollama_llm
 from utils.prompt_loader import load_query_rewrite_prompt
 from core.logger import logger
 
 
 class QueryRewriter:
     def __init__(self):
-        self.model = get_guard_model()
+        self.model = get_ollama_llm()
         self.prompt = PromptTemplate.from_template(load_query_rewrite_prompt())
         self.chain = self.prompt | self.model | StrOutputParser()
 

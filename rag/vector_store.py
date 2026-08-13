@@ -39,9 +39,6 @@ class VectorStoreService:
             length_function=len
         )
 
-    def get_retriever(self):
-        return self.vector_store.as_retriever(search_kwargs={"k": pg_conf["k"]})
-
     def search_with_scores(self, query: str, k: int) -> list[tuple[Document, float]]:
         """
         带距离分数的向量检索。

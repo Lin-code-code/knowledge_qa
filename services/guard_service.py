@@ -3,7 +3,7 @@ import re
 from functools import lru_cache
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
-from rag.model.factory import get_guard_model
+from rag.model.factory import get_ollama_llm
 from utils.prompt_loader import load_guard_prompts, load_refusal_template, load_scope_check_prompt
 from core.logger import logger
 
@@ -21,9 +21,8 @@ def get_guard_service() -> "GuardService":
 
 class GuardService:
     """L0 域内预检 + L3 输出后处理：独立分类器检查问题域与回复合规性。"""
-
     def __init__(self):
-        self.model = get_guard_model()
+        self.model = get_ollama_llm()
         self.prompt_text = load_guard_prompts()
         self.prompt = PromptTemplate.from_template(self.prompt_text)
         self.chain = self.prompt | self.model | StrOutputParser()

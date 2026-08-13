@@ -1,11 +1,9 @@
 import time
 from collections import OrderedDict
 from langchain_core.documents import Document
-from langchain_core.output_parsers import StrOutputParser
-from langchain_core.prompts import PromptTemplate
 from rag.vector_store import VectorStoreService
-from utils.prompt_loader import load_rag_prompts, load_refusal_template
-from rag.model.factory import get_chat_model, get_reranker
+from utils.prompt_loader import load_refusal_template
+from rag.model.factory import get_reranker
 from rag.query_rewriter import QueryRewriter
 from core.config import rag_conf, pg_conf
 from core.logger import logger
@@ -39,11 +37,6 @@ class _TTLCache:
 class RagService:
     def __init__(self):
         self.vector_store = VectorStoreService()
-        self.retriever = self.vector_store.get_retriever()
-        self.prompt_text = load_rag_prompts()
-        self.prompt = PromptTemplate.from_template(self.prompt_text)
-        self.model = get_chat_model()
-        self.chain = self._init_chain()
         self._cache = _TTLCache(
             maxsize=rag_conf.get("retrieval_cache_maxsize", 100),
             ttl=rag_conf.get("retrieval_cache_ttl", 600.0),
@@ -53,10 +46,6 @@ class RagService:
         self._refusal_text = load_refusal_template()
         self._rewriter = QueryRewriter()
         self._rewrite_enabled = rag_conf.get("query_rewrite_enabled", True)
-
-    def _init_chain(self):
-        chain = self.prompt | self.model | StrOutputParser()
-        return chain
 
     def retriever_docs(self, query: str) -> list[Document]:
         """

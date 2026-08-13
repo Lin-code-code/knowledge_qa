@@ -13,10 +13,5 @@ rerank_top_n: 3
 # 实测：强相关 >0.9，弱相关 0.1-0.3，不相关 <0.05
 rerank_score_min: 0.05
 
-
-
-#  Guard 配置（Qwen/Qwen3.5-4B）
-guard_model_name: Qwen/Qwen3.5-4B
-
 # Query Rewrite 配置
 query_rewrite_enabled: true

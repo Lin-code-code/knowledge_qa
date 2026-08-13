@@ -78,39 +78,43 @@
 
 ## 三层防乱说话架构
 
-```
+```text
 用户提问
-    │
-    ▼
-┌─────────────────────────────┐
-│  L0 域内预检 (GuardService)  │  ← 轻量模型 Qwen2.5-7B (SiliconFlow)
-│  YES/NO 分类                │     解析失败默认放行
-│  越界 → 直接返回拒答，不入库   │
-└─────────────┬───────────────┘
-              │ 域内
-              ▼
-┌─────────────────────────────┐
-│  L1 检索 + Rerank            │
-│  candidate_k → Rerank 精排   │
-│  rerank_score >= 0.05 过滤   │
-└─────────────┬───────────────┘
-              │ 检索结果
-              ▼
-┌─────────────────────────────┐
-│  L2 ReactAgent (qwen3.7-max) │  ← ChatTongyi (DashScope)
-│  Prompt 约束领域边界 + 越界清单 │     含 4 条 few-shot 示例
-│  工具: rag_summarize         │
-└─────────────┬───────────────┘
-              │ Agent 回答
-              ▼
-┌─────────────────────────────┐
-│  L3 分类器 (GuardService)     │  ← 轻量模型 Qwen2.5-7B (SiliconFlow)
-│  IN/OUT/REFUSE 三分类        │     解析失败默认放行
-│  越界 (OUT) → 替换拒答模板    │
-└─────────────┬───────────────┘
-              │ 最终回答
-              ▼
-           用户
+    |
+    v
++--------------------------------------+
+|  L0 域内预检 (GuardService)              |   ← 本地 Ollama qwen3.5:4b
+|  YES/NO 分类                           |       解析失败默认放行
+|  越界 → 直接返回拒答，不入库                     |
++-------------------+------------------+
+                    | 域内
+                    |
+    v
++--------------------------------------+
+|  L1 检索 + Rerank                      |
+|  candidate_k → Rerank 精排             |
+|  rerank_score >= 0.05 过滤             |
++-------------------+------------------+
+                    | 检索结果
+                    |
+    v
++--------------------------------------+
+|  L2 ReactAgent (deepseek-v4-flash)   |  ← DeepSeek
+|  Prompt 约束领域边界 + 越界清单                |      含 4 条 few-shot 示例
+|  工具: rag_summarize                   |
++-------------------+------------------+
+                    | Agent 回答
+                    |
+    v
++--------------------------------------+
+|  L3 分类器 (GuardService)               |   ← 本地 Ollama qwen3.5:4b
+|  IN/OUT/REFUSE 三分类                   |       解析失败默认放行
+|  越界 (OUT) → 替换拒答模板                   |
++-------------------+------------------+
+                    | 最终回答
+                    |
+    v
+        用户
 ```
 
 ---
@@ -124,10 +128,9 @@
 - **PostgreSQL + PGVector**：向量存储
 - **LangChain & LangGraph**：Agent 编排与大模型调度
 - **LangChain Community / LangChain PGVector**：模型与向量相关能力
-- **DashScope (ChatTongyi)**：主聊天模型
-- **SiliconFlow**：Rerank 模型 + 嵌入模型 + Guard 轻量模型
-- **DeepSeek**：RAG 总结模型
-- **Ollama**：可选本地模型/嵌入
+- **DeepSeek**：主聊天模型（ReactAgent）
+- **SiliconFlow**：嵌入模型 + Rerank 模型
+- **Ollama**：本地 L0/L3 Guard 分类模型 + Query Rewrite 改写模型
 - **PyYAML**：YAML 配置加载
 - **PyPDF**：PDF 解析
 - **httpx**：Rerank HTTP 客户端
@@ -177,7 +180,7 @@ FastAPI_chunking/
 │  ├─ rag_service.py           # RAG 服务（检索 + Rerank + TTL 缓存）
 │  ├─ vector_store.py          # PGVector 文档入库与向量检索
 │  └─ model/
-│     ├─ factory.py            # 聊天/Rerank/嵌入/Guard 模型工厂
+│     ├─ factory.py            # 模型工厂（聊天 / 嵌入 / Rerank / Ollama）
 │     └─ reranker.py           # SiliconFlow /v1/rerank HTTP 客户端
 │
 ├─ config/                     # YAML 配置（已纳入版本管理）
@@ -218,7 +221,7 @@ FastAPI_chunking/
 
 - Python 3.13+
 - PostgreSQL 数据库（需手动启用 PGVector 扩展）
-- 可访问的模型服务（DashScope / SiliconFlow / DeepSeek）
+- 可访问的模型服务（DeepSeek / SiliconFlow / 本地 Ollama）
 
 ### 数据库准备
 
@@ -230,13 +233,15 @@ psql -h <host> -U <user> -d <dbname> -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 ### 模型依赖
 
-| 用途 | 模型 | 服务商 | API Key 来源 |
-|------|------|--------|-------------|
-| 主 Agent | `qwen3.7-max` | DashScope | 阿里云百炼 KEY |
+| 用途 | 模型 | 服务商 | 接入方式 |
+|------|------|--------|---------|
+| 主 Agent（L2） | `deepseek-v4-flash` | DeepSeek | `DEEPSEEK_API_KEY`（系统环境变量） |
 | 嵌入 | `BAAI/bge-m3` | SiliconFlow | `SILICONFLOW_API_KEY`（系统环境变量） |
 | Rerank | `BAAI/bge-reranker-v2-m3` | SiliconFlow | 复用 `SILICONFLOW_API_KEY` |
-| L0/L3 Guard | `Qwen/Qwen2.5-7B-Instruct` | SiliconFlow | 复用 `SILICONFLOW_API_KEY` |
-| RAG 总结 | `deepseek-v4-flash` | DeepSeek | `DEEPSEEK_API_KEY`（系统环境变量） |
+| L0/L3 Guard | `qwen3.5:4b` | Ollama（本地） | 需本地启动 Ollama（`localhost:11434`） |
+| Query Rewrite | `qwen3.5:4b` | Ollama（本地） | 复用上述 Ollama 服务 |
+
+> **注意**：L0 域内预检、L3 兜底分类器与 Query Rewrite 均依赖本地 Ollama 服务。若 Ollama 未启动：L0/L3 会静默放行（解析失败默认 IN），越界拦截失效；Query Rewrite 会回退为原始 query。请确保部署环境已启动 `ollama serve` 并拉取 `qwen3.5:4b`。
 
 ---
 
@@ -256,8 +261,8 @@ DB=vectordb
 
 ### 2. 系统环境变量
 
-- `SILICONFLOW_API_KEY`：用于嵌入、Rerank、Guard 模型（**不能放 `.env`**）
-- `DEEPSEEK_API_KEY`：用于 RAG 总结模型
+- `SILICONFLOW_API_KEY`：用于嵌入、Rerank 模型（**不能放 `.env`**）
+- `DEEPSEEK_API_KEY`：用于主聊天模型（ReactAgent）
 
 ### 3. `config/pgvector.yml`
 
@@ -271,11 +276,11 @@ DB=vectordb
 
 ### 4. `config/rag.yml`
 
-- `chat_model_name`：Agent 主模型（默认 `qwen3.7-max`，DashScope）
-- `openai_chat_model_name`：RAG 总结模型（默认 `deepseek-v4-flash`，DeepSeek）
+- `chat_model_name`：Agent 主模型（默认 `deepseek-v4-flash`，DeepSeek）
+- `embedding_model_name`：嵌入模型（默认 `BAAI/bge-m3`，SiliconFlow）
 - `rerank_model_name` / `rerank_top_n` / `rerank_score_min`：Rerank 配置
-- `guard_model_name`：L0/L3 轻量模型（默认 `Qwen/Qwen2.5-7B-Instruct`，SiliconFlow）
 - `retrieval_cache_maxsize` / `retrieval_cache_ttl`：检索结果缓存
+- `query_rewrite_enabled`：是否启用检索词改写（改写走本地 Ollama）
 
 ### 5. `config/database.yml`
 
@@ -284,7 +289,7 @@ DB=vectordb
 
 ### 6. `config/prompts.yml`
 
-所有提示词文件路径：`main_prompt_path`、`rag_summarize_prompt_path`、`guard_prompt_path`、`scope_check_prompt_path`、`refusal_template_path`。
+所有提示词文件路径：`main_prompt_path`、`guard_prompt_path`、`scope_check_prompt_path`、`refusal_template_path`、`query_rewrite_prompt_path`。
 
 ---
 
@@ -331,10 +336,12 @@ uvicorn main:app --reload
 {
   "message": "文件解析、切分并写入向量库成功",
   "filename": "your_document.pdf",
-  "chunks": 15,
-  "file_id": "uuid"
+  "chunks": ["<file_id>-chunk0", "<file_id>-chunk1"],
+  "file_id": "<file_id>"
 }
 ```
+
+> `chunks` 为该文件写入向量的 chunk id 列表，列表长度即片段数；`file_id` 为 `uploaded_files` 中的记录 id。
 
 ### 获取已上传文件列表
 
@@ -349,14 +356,13 @@ uvicorn main:app --reload
       "id": "d8e8a22d-8568-4fa2-b2c5-0183cf6b7089",
       "filename": "洗涤养护.txt",
       "size": 6,
-      "chunk_count": 17,
-      "uploaded_at": "2026-05-28T02:40:10.399516+00:00"
+      "chunks": 17
     }
   ]
 }
 ```
 
-> `size` 单位为 KB，`chunk_count` 为该文件的向量片段数（INNER JOIN `langchain_pg_embedding` 统计）。前端根据这些值换算显示。
+> `size` 单位为 KB，`chunks` 为该文件的向量片段数（INNER JOIN `langchain_pg_embedding` 统计）。前端根据这些值换算显示。
 
 ### 删除文件记录
 
@@ -406,10 +412,11 @@ uvicorn main:app --reload
 2. 文件类型通过 `core/validators.py` 校验
 3. 流式写入 `data/` 临时文件，同时计算 MD5
 4. MD5 命中已有记录则拒绝重复入库
-5. 调用 `VectorStoreService.load_document()` 读取文件、切分、写入 PGVector
-6. `FileRepository` 记录文件元数据
-7. 请求结束时由 `get_db()` 统一提交事务；任一步异常则整体回滚
-8. 删除临时文件
+5. 调用 `VectorStoreService.load_document()` 读取文件、切分、写入 PGVector（走 PGVector 独立同步连接）
+6. `FileRepository` 记录文件元数据（走异步 ORM 会话，请求结束时统一提交）
+7. 删除临时文件
+
+> **注意**：向量写入与 `uploaded_files` 记录分属两个连接/事务。若第 6 步提交失败（如 DB 异常），已写入的向量不会自动回滚，可能产生孤立向量。
 
 ### 问答流程
 
@@ -461,6 +468,10 @@ uvicorn main:app --reload
 ### 5. 表结构需要手动创建吗？
 
 是的。`conversations`、`messages`、`uploaded_files` 需手动执行 DDL。`langchain_pg_embedding` 和 `langchain_pg_collection` 由 PGVector 自动创建。参考 `scripts/data_test.sql`。
+
+### 6. 越界问题被放行 / L0 拦截失效怎么办？
+
+检查本地 Ollama 是否已启动（`ollama serve`）且已拉取 `qwen3.5:4b` 模型。Ollama 未启动时，L0/L3 会静默放行（解析失败默认 IN），越界拦截将失效。
 
 ---
 
