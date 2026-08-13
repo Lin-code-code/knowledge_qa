@@ -1,16 +1,16 @@
 import os
-from langchain_ollama.embeddings import OllamaEmbeddings
-from langchain_community.chat_models.tongyi import ChatTongyi
 from langchain_core.language_models import BaseChatModel
 from core.config import rag_conf
-
 from langchain_openai.chat_models import ChatOpenAI
 from langchain_openai.embeddings import OpenAIEmbeddings
-
+from langchain_ollama import OllamaLLM
 
 def get_chat_model() -> BaseChatModel:
-    return ChatTongyi(model=rag_conf["chat_model_name"])
-
+    return ChatOpenAI(
+        model=rag_conf["chat_model_name"],
+        base_url="https://api.deepseek.com",
+        api_key=os.environ.get('DEEPSEEK_API_KEY')
+    )
 
 def get_guard_model() -> BaseChatModel:
     return ChatOpenAI(
@@ -19,38 +19,28 @@ def get_guard_model() -> BaseChatModel:
         api_key=os.environ.get("SILICONFLOW_API_KEY"),
     )
 
-
-def get_embed_model() -> OllamaEmbeddings:
-    return OllamaEmbeddings(model=rag_conf["ol_embedding_model_name"], base_url="http://127.0.0.1:11434")
-
-
-def get_openai_chat_model() -> ChatOpenAI:
-    return ChatOpenAI(
-        model=rag_conf["openai_chat_model_name"],
-        base_url="https://api.deepseek.com",
-        api_key=os.environ.get('DEEPSEEK_API_KEY')
-    )
-
-
-def get_openai_embed_model() -> OpenAIEmbeddings:
+def get_embed_model() -> OpenAIEmbeddings:
     return OpenAIEmbeddings(
         base_url="https://api.siliconflow.cn/v1",
-        model=rag_conf["openai_embedding_model_name"],
+        model=rag_conf["embedding_model_name"],
         api_key=os.environ.get('SILICONFLOW_API_KEY'),
         chunk_size=64
     )
-
 
 def get_reranker():
     from rag.model.reranker import RerankClient
     return RerankClient()
 
-if __name__ == '__main__':
-    res = get_openai_embed_model().embed_query("今天天气如何？")
-    print(len(res))
-    print(res)
+# def get_ollama_llm():
+#     return OllamaLLM(
+#         model=rag_conf["guard_model_name"],
+#         base_url="http://localhost:11434",
+#         reasoning=False
+#     )
 
-    res1 = get_openai_chat_model().stream([{"role": "user", "content": "你是谁？可以做什么？"}])
-    for chunk in res1:
-        print(chunk.content, end="", flush=True)
+if __name__ == '__main__':
+    result = get_chat_model().invoke("你是谁？")
+    for r in result.content:
+        print(r, end="", flush=True)
+
 

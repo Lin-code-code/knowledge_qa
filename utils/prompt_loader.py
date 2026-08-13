@@ -62,6 +62,21 @@ def load_refusal_template():
         raise e
 
 
+def load_query_rewrite_prompt():
+    try:
+        rewrite_path = get_abs_path(prompts_conf["query_rewrite_prompt_path"])
+    except KeyError as e:
+        logger.error(f"[load_query_rewrite_prompt]在yaml配置中没有query_rewrite_prompt_path配置项")
+        raise e
+
+    try:
+        with open(rewrite_path, "r", encoding="utf-8") as f:
+            return f.read()
+    except Exception as e:
+        logger.error(f"[load_query_rewrite_prompt]解析改写prompt出错，{str(e)}")
+        raise e
+
+
 def load_scope_check_prompt():
     try:
         scope_path = get_abs_path(prompts_conf["scope_check_prompt_path"])

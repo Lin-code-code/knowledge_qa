@@ -5,8 +5,12 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from db.conversation_repo import ConversationRepository
 from agent.tool.agent_tools import get_rag_service
 from services.guard_service import get_guard_service
+from core.config import db_conf
 
 _REFUSAL_MARKER = "暂无法回答该问题"
+# 传给 agent 的历史轮数（每轮=H+AI=2 条）。0=不传历史，每轮独立问答。
+# 解决历史污染：agent 看到上一轮 AI 回答内容会复用旧话题的工具调用，prompt 软约束不可靠。
+_AGENT_HISTORY_TURNS = db_conf.get("agent_history_turns", 0)
 
 
 @lru_cache(maxsize=1)
@@ -28,6 +32,21 @@ def _filter_refusal_history(history: list[BaseMessage]) -> list[BaseMessage]:
             continue
         result.append(msg)
     return result
+
+
+def _limit_history_turns(history: list[BaseMessage], turns: int) -> list[BaseMessage]:
+    """
+    按轮数截断传给 agent 的历史（1 轮 = 1 个 HumanMessage + 1 个 AIMessage = 2 条消息）。
+    turns <= 0 时返回空列表，即每轮独立问答、不传任何历史。
+    解决历史污染：agent 看到上一轮 AI 回答的具体内容后会复用旧话题的工具调用
+    （如洗护问题调尺码工具），prompt 软约束对 qwen3.7-max 不可靠，需代码级根治。
+    """
+    if turns <= 0:
+        return []
+    max_msgs = turns * 2
+    if len(history) > max_msgs:
+        return history[-max_msgs:]
+    return history
 
 
 class ChatService:
@@ -54,6 +73,7 @@ class ChatService:
 
         history = await self.store.get_recent_messages(conv_uuid)
         history = _filter_refusal_history(history)
+        history = _limit_history_turns(history, _AGENT_HISTORY_TURNS)
 
         agent = _get_react_agent()
         answer = await agent.aexecute(message, history)

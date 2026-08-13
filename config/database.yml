@@ -8,6 +8,14 @@ pool_recycle: 3600
 pool_pre_ping: true
 
 # 对话管理配置
-max_messages: 30
+# max_messages: 从 DB 取出的最大历史消息条数（仅控制 DB 查询量）。
+# 注意：conversation_repo.py 的 MAX_MESSAGES 是模块级常量，改此项需重启服务才生效。
+max_messages: 8
 max_tokens: 2000
 llm_max_concurrency: 50
+
+# agent_history_turns: 实际传给 ReactAgent 的历史轮数（1 轮 = 1 个 HumanMessage + 1 个 AIMessage）。
+# 0 = 不传历史，每轮独立问答（默认）。解决历史污染：agent 看到上一轮 AI 回答的具体内容后
+# 会复用旧话题的工具调用（如洗护问题调尺码工具），prompt 软约束对 qwen3.7-max 不可靠。
+# 服装客服场景用户问题大多独立，多轮指代极少；若需指代消解（"它怎么洗"），可调为 1。
+agent_history_turns: 0

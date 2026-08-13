@@ -6,7 +6,7 @@ from core.config import pg_conf, env_conf
 from core.logger import logger
 from utils.file_handler import pdf_loader, txt_loader
 
-from rag.model.factory import get_openai_embed_model
+from rag.model.factory import get_embed_model
 
 class VectorStoreService:
     def __init__(
@@ -26,7 +26,7 @@ class VectorStoreService:
         self.conn_str = connection_str
 
         self.vector_store = PGVector(
-            embeddings=get_openai_embed_model(),
+            embeddings=get_embed_model(),
             collection_name=pg_conf["collection_name_1024"],
             connection=self.conn_str,
             use_jsonb=True,

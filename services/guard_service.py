@@ -10,6 +10,8 @@ from core.logger import logger
 _LABELS = ("IN", "OUT", "REFUSE")
 _LABEL_RE = re.compile(r'"(?:label|fit|result|classification|category|frame|ab)"\s*:\s*"?(\w+)"?', re.IGNORECASE)
 _SCOPE_RE = re.compile(r'"(?:label|fit|result|classification|category)"\s*:\s*"?(\w+)"?', re.IGNORECASE)
+_LABEL_FIELD_RE = re.compile(r'"label"\s*:\s*"([^"]+)"', re.IGNORECASE)
+_BARE_WORD_RE = re.compile(r'\b(OUT|IN|REFUSE|REFUS\w*)\b', re.IGNORECASE)
 
 
 @lru_cache(maxsize=1)
@@ -91,22 +93,25 @@ class GuardService:
     def _parse_label(raw: str) -> str:
         """
         从 LLM 输出中解析标签（IN/OUT/REFUSE）。按优先级依次尝试：
-        1. 严格 JSON 解析（字段名兼容 label/fit/result 等）
-        2. 正则匹配 "field":"VALUE" 形式，VALUE 模糊匹配
-        3. 裸文本模糊查找标签关键词
+        1. 严格 JSON 解析（字段名兼容 label/fit/result 等）；JSON 解析失败时优先抽取 "label" 字段
+        2. 正则匹配 "field":"VALUE" 形式，VALUE 精确匹配
+        3. 裸文本整词匹配（\bOUT\b / \bIN\b 等），仅异常路径触发
         全部失败则默认 IN 避免误杀。
         """
         text = raw.strip()
 
         def _normalize(val: str) -> str:
-            """将模型输出模糊归一化为 IN/OUT/REFUSE。"""
+            """将模型输出精确归一化为 IN/OUT/REFUSE。
+            使用精确匹配而非子串匹配，避免 'NOT OUT' / 'ABOUT' / 'INPUT' 等
+            含 OUT/IN 子串的文本被误归一化为越界标签。
+            """
             v = val.upper().strip()
-            if "REFUS" in v:
-                return "REFUSE"
-            if "OUT" in v:
+            if v == "OUT":
                 return "OUT"
-            if "IN" in v:
+            if v == "IN":
                 return "IN"
+            if v.startswith("REFUS"):
+                return "REFUSE"
             return ""
 
         # 1. 尝试 JSON 解析
@@ -121,7 +126,12 @@ class GuardService:
                         if norm:
                             return norm
             except json.JSONDecodeError:
-                pass
+                # JSON 解析失败时，优先直接抽取 "label" 字段值（比 step 2 的宽泛字段正则更精准）
+                m = _LABEL_FIELD_RE.search(text)
+                if m:
+                    norm = _normalize(m.group(1))
+                    if norm:
+                        return norm
 
         # 2. 正则匹配 "field":"VALUE"
         for m in _LABEL_RE.finditer(text):
@@ -129,13 +139,15 @@ class GuardService:
             if norm:
                 return norm
 
-        # 3. 裸文本模糊查找（优先级 OUT > REFUSE > IN）
-        upper = text.upper()
-        if "OUT" in upper:
+        # 3. 裸文本兜底：仅在模型未输出合规 JSON 的异常路径触发。
+        # 使用整词匹配（\b...\b），避免子串误命中（如 'not OUT of scope' 中的 OUT）。
+        # 优先级保持 OUT > REFUSE > IN；匹配不到任何整词时默认 IN（与 prompt 规则一致，避免误杀）。
+        matches = [m.group(1).upper() for m in _BARE_WORD_RE.finditer(text)]
+        if "OUT" in matches:
             return "OUT"
-        if "REFUS" in upper:
+        if any(v.startswith("REFUS") for v in matches):
             return "REFUSE"
-        if "IN" in upper:
+        if "IN" in matches:
             return "IN"
 
         logger.warning(f"[GuardService] label 解析失败，默认 IN: {text[:120]}")

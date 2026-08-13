@@ -15,7 +15,7 @@ def load_system_prompt_cached() -> str:
 class ReactAgent:
     def __init__(self):
         self.agent = create_agent(
-            model=get_chat_model(),
+            model=get_chat_model() ,
             system_prompt=load_system_prompt_cached(),
             tools=[rag_summarize, get_current_time],
             middleware=[monitor_tool, log_before_model]

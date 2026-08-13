@@ -5,7 +5,8 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from rag.vector_store import VectorStoreService
 from utils.prompt_loader import load_rag_prompts, load_refusal_template
-from rag.model.factory import get_chat_model, get_reranker, get_openai_chat_model
+from rag.model.factory import get_chat_model, get_reranker
+from rag.query_rewriter import QueryRewriter
 from core.config import rag_conf, pg_conf
 from core.logger import logger
 
@@ -41,7 +42,7 @@ class RagService:
         self.retriever = self.vector_store.get_retriever()
         self.prompt_text = load_rag_prompts()
         self.prompt = PromptTemplate.from_template(self.prompt_text)
-        self.model = get_openai_chat_model()
+        self.model = get_chat_model()
         self.chain = self._init_chain()
         self._cache = _TTLCache(
             maxsize=rag_conf.get("retrieval_cache_maxsize", 100),
@@ -50,6 +51,8 @@ class RagService:
         self._last_docs: list[Document] = []
         self._reranker = get_reranker()
         self._refusal_text = load_refusal_template()
+        self._rewriter = QueryRewriter()
+        self._rewrite_enabled = rag_conf.get("query_rewrite_enabled", True)
 
     def _init_chain(self):
         chain = self.prompt | self.model | StrOutputParser()
@@ -107,10 +110,8 @@ class RagService:
         return sources
 
     def rag_summarize(self, query: str) -> str:
-        """
-        检索知识库并返回格式化的原文资料片段，不做 LLM 总结。
-        总结和匹配交由 agent（更强的主模型）完成，避免二次 LLM 调用的不稳定。
-        """
+        if self._rewrite_enabled:
+            query = self._rewriter.rewrite(query)
         context_docs = self.retriever_docs(query)
         self._last_docs = context_docs
 
