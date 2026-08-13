@@ -18,21 +18,18 @@ async def list_conversations(
     user_id: str = "anonymous",
     db: AsyncSession = Depends(get_db),
 ):
-    try:
-        store = ConversationRepository(db)
-        convs = await store.list_conversations(user_id=user_id)
-        items = []
-        for c in convs:
-            items.append({
-                "conversation_id": str(c.id),
-                "title": c.title,
-                "created_at": c.created_at.isoformat(),
-                "updated_at": c.updated_at.isoformat(),
-                "message_count": 0,
-            })
-        return ConversationListResponse(conversations=items)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取会话列表失败: {str(e)}")
+    store = ConversationRepository(db)
+    convs = await store.list_conversations(user_id=user_id)
+    items = []
+    for c in convs:
+        items.append({
+            "conversation_id": str(c.id),
+            "title": c.title,
+            "created_at": c.created_at.isoformat(),
+            "updated_at": c.updated_at.isoformat(),
+            "message_count": 0,
+        })
+    return ConversationListResponse(conversations=items)
 
 
 @router.get("/chat/{conversation_id}/messages", response_model=MessageListResponse)
@@ -45,19 +42,16 @@ async def get_chat_messages(
     except ValueError:
         raise HTTPException(status_code=400, detail="conversation_id 格式无效")
 
-    try:
-        store = ConversationRepository(db)
-        msgs = await store.get_messages(conv_uuid)
-        return MessageListResponse(
-            messages=[{
-                "role": m.role,
-                "content": m.content,
-                "created_at": m.created_at.isoformat(),
-            } for m in msgs],
-            conversation_id=conversation_id,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取消息列表失败: {str(e)}")
+    store = ConversationRepository(db)
+    msgs = await store.get_messages(conv_uuid)
+    return MessageListResponse(
+        messages=[{
+            "role": m.role,
+            "content": m.content,
+            "created_at": m.created_at.isoformat(),
+        } for m in msgs],
+        conversation_id=conversation_id,
+    )
 
 
 @router.post("/conversations", response_model=ConversationCreateResponse)
@@ -65,18 +59,15 @@ async def create_conversation(
     request: ConversationCreateRequest,
     db: AsyncSession = Depends(get_db),
 ):
-    try:
-        store = ConversationRepository(db)
-        conv_id = await store.create_conversation(
-            user_id=request.user_id or "anonymous",
-            title=request.title or "新对话",
-        )
-        return ConversationCreateResponse(
-            conversation_id=str(conv_id),
-            title=request.title or "新对话",
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"创建会话失败: {str(e)}")
+    store = ConversationRepository(db)
+    conv_id = await store.create_conversation(
+        user_id=request.user_id or "anonymous",
+        title=request.title or "新对话",
+    )
+    return ConversationCreateResponse(
+        conversation_id=str(conv_id),
+        title=request.title or "新对话",
+    )
 
 
 @router.post("/chat/", response_model=ChatResponse)
@@ -87,16 +78,11 @@ async def chat(
     if not request.message or not request.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")
 
-    try:
-        service = ChatService(db)
-        answer, sources, chat_id = await service.process_message(
-            request.message, request.chatId
-        )
-        return ChatResponse(answer=answer, sources=sources, chatId=chat_id)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"问答处理失败: {str(e)}")
+    service = ChatService(db)
+    answer, sources, chat_id = await service.process_message(
+        request.message, request.chatId
+    )
+    return ChatResponse(answer=answer, sources=sources, chatId=chat_id)
 
 
 @router.delete("/chat/{chat_id}", response_model=ChatDeleteResponse)
@@ -105,23 +91,17 @@ async def delete_chat(
     db: AsyncSession = Depends(get_db),
 ):
     try:
-        try:
-            conv_uuid = uuid.UUID(chat_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="conversation_id 格式无效")
+        conv_uuid = uuid.UUID(chat_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="conversation_id 格式无效")
 
-        store = ConversationRepository(db)
-        deleted = await store.delete_conversation(conv_uuid)
+    store = ConversationRepository(db)
+    deleted = await store.delete_conversation(conv_uuid)
 
-        if not deleted:
-            raise HTTPException(status_code=404, detail="对话不存在")
+    if not deleted:
+        raise HTTPException(status_code=404, detail="对话不存在")
 
-        return ChatDeleteResponse(
-            message="删除成功",
-            chatId=chat_id,
-        )
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除失败: {str(e)}")
+    return ChatDeleteResponse(
+        message="删除成功",
+        chatId=chat_id,
+    )

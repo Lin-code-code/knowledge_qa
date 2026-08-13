@@ -64,7 +64,7 @@
 
 ### 会话管理
 
-- 越界提问不创建会话、不入库
+- L0 越界提问与 L3 拦截的越界回答均不创建会话、不入库（仅 L3 放行的问答才落库）
 - 创建会话、获取会话列表
 - 获取某个会话的消息列表
 - 删除会话及其消息
@@ -172,6 +172,7 @@ FastAPI_chunking/
 │
 ├─ agent/                      # 智能代理组件
 │  ├─ react_agent.py           # ReactAgent（LangGraph 实现）
+│  ├─ rewrite_agent.py         # RewriteAgent（query 改写，create_agent 封装）
 │  └─ tool/
 │     ├─ agent_tools.py        # Agent 工具（rag_summarize, 时间查询）
 │     └─ middleware.py         # 工具调用监控与日志
@@ -208,6 +209,10 @@ FastAPI_chunking/
 │  ├─ css/
 │  └─ js/
 │
+├─ scripts/                     # 运维脚本
+│  ├─ create_hnsw_index.py      # 为 langchain_pg_embedding 创建 HNSW 索引
+│  └─ reconcile_embeddings.py   # 清理孤儿向量（上传失败兜底，--apply 执行删除）
+│
 ├─ data/                       # 上传文件临时目录
 ├─ logs/                       # 运行日志（按天轮转，保留 30 天）
 └─ tests/                      # 测试目录（待补充）
@@ -239,7 +244,7 @@ psql -h <host> -U <user> -d <dbname> -c "CREATE EXTENSION IF NOT EXISTS vector;"
 | 嵌入 | `BAAI/bge-m3` | SiliconFlow | `SILICONFLOW_API_KEY`（系统环境变量） |
 | Rerank | `BAAI/bge-reranker-v2-m3` | SiliconFlow | 复用 `SILICONFLOW_API_KEY` |
 | L0/L3 Guard | `qwen3.5:4b` | Ollama（本地） | 需本地启动 Ollama（`localhost:11434`） |
-| Query Rewrite | `qwen3.5:4b` | Ollama（本地） | 复用上述 Ollama 服务 |
+| Query Rewrite | `qwen3.5:4b`（ChatOllama） | Ollama（本地） | 复用上述 Ollama 服务 |
 
 > **注意**：L0 域内预检、L3 兜底分类器与 Query Rewrite 均依赖本地 Ollama 服务。若 Ollama 未启动：L0/L3 会静默放行（解析失败默认 IN），越界拦截失效；Query Rewrite 会回退为原始 query。请确保部署环境已启动 `ollama serve` 并拉取 `qwen3.5:4b`。
 
@@ -412,28 +417,28 @@ uvicorn main:app --reload
 2. 文件类型通过 `core/validators.py` 校验
 3. 流式写入 `data/` 临时文件，同时计算 MD5
 4. MD5 命中已有记录则拒绝重复入库
-5. 调用 `VectorStoreService.load_document()` 读取文件、切分、写入 PGVector（走 PGVector 独立同步连接）
-6. `FileRepository` 记录文件元数据（走异步 ORM 会话，请求结束时统一提交）
+5. 调用 `VectorStoreService.load_document()` 读取文件、切分、写入 PGVector（同步 PGVector，走线程池避免阻塞事件循环）
+6. `FileRepository` 记录文件元数据（走异步 ORM 会话，请求结束时统一提交）；此步失败会**补偿删除**刚写入的向量
 7. 删除临时文件
 
-> **注意**：向量写入与 `uploaded_files` 记录分属两个连接/事务。若第 6 步提交失败（如 DB 异常），已写入的向量不会自动回滚，可能产生孤立向量。
+> **注意**：向量写入与 `uploaded_files` 记录分属两个连接/事务，无法做到严格 ACID。失败时通过补偿删除 + 对账脚本兜底：`uv run python scripts/reconcile_embeddings.py`（dry-run）或加 `--apply` 实际清理孤立向量。
 
 ### 问答流程
 
 1. 用户调用 `POST /api/chat/`
 2. **L0 预检**：`GuardService.check_question_scope()` 用轻量模型判定问题是否属于服装领域；越界直接返回拒答，不入库、不创建会话
-3. 域内问题：创建/获取会话，获取最近历史（自动过滤拒答问答对）
+3. 已有会话则获取最近历史（自动过滤拒答问答对；`agent_history_turns=0` 时实际不传给 agent）
 4. **L1 检索**：`RagService.retriever_docs()` 向量召回 candidate_k → Rerank 精排 → rerank_score >= rerank_score_min 过滤
-5. **L2 Agent**：`ReactAgent` 接收历史 + 问题，通过 `rag_summarize` 工具获取原文资料（不做 LLM 总结），自行分析匹配回答
-6. **L3 兜底**：Agent 回答经 `GuardService.check()` 检查，越界（OUT）替换为统一拒答模板
-7. 返回 `(answer, sources, chatId)`，消息写入历史（由 `get_db()` 统一提交）
+5. **L2 Agent**：`ReactAgent` 接收历史 + 问题，通过 `rag_summarize` 工具获取原文资料（不做 LLM 总结），自行分析匹配回答；检索到的来源在请求内收集（contextvar，按请求隔离）
+6. **L3 兜底**：Agent 回答经 `GuardService.check()` 检查，越界（OUT）替换为统一拒答模板，且**不创建会话、不入库**
+7. L3 放行后才创建/复用会话，返回 `(answer, sources, chatId)`，消息写入历史（由 `get_db()` 统一提交）
 
 ### 文件删除流程
 
 1. 调用 `DELETE /api/files/{file_id}`
-2. 先删除 PGVector 中该文件的向量数据
-3. 再删除 `uploaded_files` 记录
-4. 同一事务，保证原子性，避免孤立向量
+2. 先删除 `uploaded_files` 记录；记录不存在则返回 404，不触碰向量
+3. 再删除 PGVector 中该文件的向量数据
+4. 两步同一事务，任一步失败整体回滚，避免孤立数据
 
 ---
 

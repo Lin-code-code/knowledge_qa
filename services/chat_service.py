@@ -1,10 +1,11 @@
 from functools import lru_cache
 from uuid import UUID
+import asyncio
 from sqlalchemy.ext.asyncio import AsyncSession
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from db.conversation_repo import ConversationRepository
-from agent.tool.agent_tools import get_rag_service
 from services.guard_service import get_guard_service
+from rag.rag_service import start_sources_collection, collect_sources, _sources_ctx
 from core.config import db_conf
 
 _REFUSAL_MARKER = "暂无法回答该问题"
@@ -58,33 +59,43 @@ class ChatService:
     ) -> tuple[str, list[str], str]:
         # L0 预检：越界问题直接拒答，不创建会话，不落库
         guard_service = get_guard_service()
-        in_scope = guard_service.check_question_scope(message)
+        in_scope = await asyncio.to_thread(guard_service.check_question_scope, message)
         if not in_scope:
             return guard_service.refusal_text, [], chat_id or ""
 
+        # 已有会话才取历史（agent_history_turns=0 时不需要历史，仅在 chat_id 存在时读取）
+        conv_uuid: UUID | None = None
+        history: list[BaseMessage] = []
+        if chat_id:
+            conv_uuid = UUID(chat_id)
+            history = await self.store.get_recent_messages(conv_uuid)
+            history = _filter_refusal_history(history)
+            history = _limit_history_turns(history, _AGENT_HISTORY_TURNS)
+
+        agent = _get_react_agent()
+
+        # 收集本次请求检索到的 sources（contextvar 按请求隔离）
+        token = start_sources_collection()
+        try:
+            answer = await agent.aexecute(message, history)
+            sources = collect_sources()
+        finally:
+            _sources_ctx.reset(token)
+
+        # L3 兜底：越界则替换为拒答模板，且不建会话、不落库（与 L0 语义一致）
+        ok, guarded_answer = await asyncio.to_thread(guard_service.check, message, answer)
+        if not ok:
+            return guarded_answer, [], chat_id or ""
+
+        answer = guarded_answer
+
+        # 会话在 L3 放行后才创建，保证越界问题不留下空会话
         if not chat_id:
-            conv_id = await self.store.create_conversation(
+            conv_uuid = await self.store.create_conversation(
                 user_id="anonymous",
                 title=message[:15] + ("..." if len(message) > 15 else ""),
             )
-            chat_id = str(conv_id)
-
-        conv_uuid = UUID(chat_id)
-
-        history = await self.store.get_recent_messages(conv_uuid)
-        history = _filter_refusal_history(history)
-        history = _limit_history_turns(history, _AGENT_HISTORY_TURNS)
-
-        agent = _get_react_agent()
-        answer = await agent.aexecute(message, history)
-
-        # L3 兜底：独立分类器检查回复合规性，越界则替换为拒答模板
-        ok, guarded_answer = guard_service.check(message, answer)
-        if not ok:
-            answer = guarded_answer
-
-        rag_service = get_rag_service()
-        sources = rag_service.get_sources()
+            chat_id = str(conv_uuid)
 
         await self.store.add_messages(conv_uuid, [
             HumanMessage(content=message),

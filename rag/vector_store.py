@@ -46,6 +46,12 @@ class VectorStoreService:
         """
         return self.vector_store.similarity_search_with_score(query, k=k)
 
+    def delete_documents(self, ids: list[str]) -> None:
+        """按 chunk id 删除向量（用于上传失败时的补偿删除）。"""
+        if not ids:
+            return
+        self.vector_store.delete(ids=ids)
+
     def load_document(self, file_id: str, target_path: str):
         """
             加载当个文件

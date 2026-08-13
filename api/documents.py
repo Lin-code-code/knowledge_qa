@@ -1,3 +1,4 @@
+import asyncio
 import os, uuid, hashlib
 from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
 
@@ -29,6 +30,7 @@ async def upload_and_split(
         raise HTTPException(status_code=400, detail=str(e))
 
     temp_path = ""
+    vs = VectorStoreService(chunk_size, chunk_overlap)
     try:
         data_dir = get_abs_path(pg_conf["data_path"])
         os.makedirs(data_dir, exist_ok=True)
@@ -55,27 +57,31 @@ async def upload_and_split(
         if exist_file is not None:
             raise HTTPException(status_code=400, detail="文件已存在于向量库中！")
 
-        split_documents = VectorStoreService(chunk_size, chunk_overlap).load_document(file_id, target_path=temp_path)
-        if split_documents is None:
+        # 向量写入（同步 PGVector，走线程池避免阻塞事件循环）
+        added_ids = await asyncio.to_thread(vs.load_document, file_id, target_path=temp_path)
+        if added_ids is None:
             raise HTTPException(status_code=500, detail="文件解析、切分并写入向量库失败")
 
-        newfile = await repo.save(
-            file_id=file_id,
-            filename=filename,
-            md5_hex=file_md5_hex,
-            file_size=file_size // 1024,
-        )
+        # 记录元数据；失败时补偿删除刚写入的向量（跨存储无法原子，补偿 + 对账脚本兜底）
+        try:
+            newfile = await repo.save(
+                file_id=file_id,
+                filename=filename,
+                md5_hex=file_md5_hex,
+                file_size=file_size // 1024,
+            )
+        except Exception:
+            await asyncio.to_thread(vs.delete_documents, added_ids)
+            raise
 
         return {
             "message": "文件解析、切分并写入向量库成功",
             "filename": filename,
-            "chunks": split_documents,
+            "chunks": added_ids,
             "file_id": newfile.id
         }
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"文件处理失败: {str(e)}")
     finally:
         await file.close()
         if temp_path and os.path.exists(temp_path):
@@ -84,27 +90,19 @@ async def upload_and_split(
 
 @router.get("/list")
 async def list_uploaded_files(db: AsyncSession = Depends(get_db)):
-    try:
-        repo = FileRepository(db)
-        files = await repo.list_all()
-        return {"files": files}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取文件列表失败: {str(e)}")
+    repo = FileRepository(db)
+    files = await repo.list_all()
+    return {"files": files}
 
 
 @router.delete("/{file_id}")
 async def delete_uploaded_file(file_id: str, db: AsyncSession = Depends(get_db)):
-    try:
-        repo = FileRepository(db)
+    repo = FileRepository(db)
 
-        await repo.delete_vector_embeddings(file_id=file_id.replace("-", ""))
+    # 先删主记录（不存在则 404，不动向量）；向量删除与记录删除在同一事务，任一步失败整体回滚
+    deleted = await repo.delete_by_id(file_id=file_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="文件记录不存在")
 
-        deleted = await repo.delete_by_id(file_id=file_id)
-        if not deleted:
-            raise HTTPException(status_code=404, detail="文件记录不存在")
-
-        return {"message": "文件记录已删除"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除文件记录失败: {str(e)}")
+    await repo.delete_vector_embeddings(file_id=file_id.replace("-", ""))
+    return {"message": "文件记录已删除"}

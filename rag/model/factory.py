@@ -3,6 +3,7 @@ from langchain_core.language_models import BaseChatModel
 from core.config import rag_conf
 from langchain_openai.chat_models import ChatOpenAI
 from langchain_openai.embeddings import OpenAIEmbeddings
+from langchain_ollama.chat_models import ChatOllama
 from langchain_ollama.llms import OllamaLLM, BaseLLM
 
 def get_chat_model() -> BaseChatModel:
@@ -10,7 +11,7 @@ def get_chat_model() -> BaseChatModel:
         model=rag_conf["chat_model_name"],
         base_url="https://api.deepseek.com",
         api_key=os.environ.get('DEEPSEEK_API_KEY'),
-        max_tokens=200,
+        max_tokens=512,
         reasoning=None
     )
 
@@ -31,6 +32,14 @@ def get_ollama_llm() -> BaseLLM:
         model="qwen3.5:4b",
         base_url="http://localhost:11434",
         reasoning=False
+    )
+
+def get_ollama_chat_model() -> BaseChatModel:
+    """本地 Ollama 聊天模型（create_agent 需要 BaseChatModel，不能用 OllamaLLM）。"""
+    return ChatOllama(
+        model="qwen3.5:4b",
+        base_url="http://localhost:11434",
+        reasoning=False,
     )
 
 if __name__ == '__main__':
