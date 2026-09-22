@@ -10,6 +10,7 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.config import db_conf
+from core.tokens import estimate_tokens
 from db.mappers import to_conversation, to_message
 from db.models.conversation import Conversation as ConversationModel
 from db.models.conversation import Message as MessageModel
@@ -96,18 +97,12 @@ class SqlAlchemyConversationRepository:
         selected: list[MessageModel] = []
         token_count = 0
         for turn in reversed(turns):
-            turn_tokens = sum(self._estimate_tokens(item.content) for item in turn)
+            turn_tokens = sum(estimate_tokens(item.content) for item in turn)
             if len(selected) >= max_turns * 2 or token_count + turn_tokens > max_tokens:
                 break
             selected[0:0] = turn
             token_count += turn_tokens
         return [to_message(item) for item in selected]
-
-    @staticmethod
-    def _estimate_tokens(text: str) -> int:
-        chinese_chars = sum(1 for char in text if "一" <= char <= "鿿")
-        other_chars = len(text) - chinese_chars
-        return int(chinese_chars / 1.5 + other_chars / 4)
 
     async def add_turn(
         self,

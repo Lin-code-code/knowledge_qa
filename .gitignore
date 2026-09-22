@@ -5,6 +5,8 @@ data
 __pycache__/
 .pytest_cache/
 .idea/
+.superpowers
+.uv-cache
 
 # 运行产物（不入库）
 server.stderr.log

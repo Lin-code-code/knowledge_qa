@@ -212,8 +212,6 @@ def make_service(store):
         summary_agent=None,
     )
     service.memory_enabled = True
-    service.router_enabled = True
-    service.summary_enabled = False
     return service
 
 
@@ -347,7 +345,6 @@ async def test_first_message_creates_conversation_and_topic(monkeypatch):
 async def test_summary_failure_does_not_break_answer(monkeypatch):
     store = FakeStore()
     service = make_service(store)
-    service.summary_enabled = True
     agent = FakeAgent()
     monkeypatch.setattr(service, "_route", lambda *args, **kwargs: _async_result(
         TopicDecision(
@@ -376,7 +373,6 @@ async def test_summary_version_conflict_does_not_override(monkeypatch):
     store = FakeStore()
     store.topics.summary_update_result = False
     service = make_service(store)
-    service.summary_enabled = True
     agent = FakeAgent()
     monkeypatch.setattr(service, "_route", lambda *args, **kwargs: _async_result(
         TopicDecision(
@@ -410,7 +406,6 @@ async def test_out_of_scope_not_saved_to_summary_or_memory(monkeypatch):
     )
     store = FakeStore(active=active)
     service = make_service(store)
-    service.summary_enabled = True
     service.memory_service = FakeMemoryService([])
     monkeypatch.setattr(service, "_route", lambda *args, **kwargs: _async_result(
         TopicDecision(action="OUT_OF_SCOPE", scope="OUT", canonical_query="今天股票涨了吗")

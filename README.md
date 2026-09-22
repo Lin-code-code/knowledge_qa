@@ -134,7 +134,7 @@ psql -h <host> -U <user> -d <dbname> -f scripts/migrate_conversation_memory.sql
     |
     v
 +--------------------------------------+
-|  L0 域内预检 (GuardAgent)                |   ← 本地 Ollama qwen3.5:4b
+|  L0 域内预检 (GuardAgent)                |   ← DeepSeek deepseek-flash
 |  YES/NO 分类                           |       解析失败默认放行
 |  越界 → 直接返回拒答，不入库                     |
 +-------------------+------------------+
@@ -150,7 +150,7 @@ psql -h <host> -U <user> -d <dbname> -f scripts/migrate_conversation_memory.sql
                     |
     v
 +--------------------------------------+
-|  L2 ReactAgent (deepseek-v4-flash)   |  ← DeepSeek
+|  L2 ReactAgent (deepseek-flash)      |  ← DeepSeek
 |  Prompt 约束领域边界 + 越界清单                |      含 4 条 few-shot 示例
 |  工具: rag_summarize                   |
 +-------------------+------------------+
@@ -158,7 +158,7 @@ psql -h <host> -U <user> -d <dbname> -f scripts/migrate_conversation_memory.sql
                     |
     v
 +--------------------------------------+
-|  L3 分类器 (GuardAgent)                  |   ← 本地 Ollama qwen3.5:4b
+|  L3 分类器 (GuardAgent)                  |   ← DeepSeek deepseek-flash
 |  IN/OUT/REFUSE 三分类                   |       解析失败默认放行
 |  越界 (OUT) → 替换拒答模板                   |
 +-------------------+------------------+
@@ -179,9 +179,8 @@ psql -h <host> -U <user> -d <dbname> -f scripts/migrate_conversation_memory.sql
 - **PostgreSQL + PGVector**：向量存储
 - **LangChain & LangGraph**：Agent 编排与大模型调度
 - **LangChain Community / LangChain PGVector**：模型与向量相关能力
-- **DeepSeek**：主聊天模型 + 检索 Agent（ReactAgent / RetrievalAgent）
-- **SiliconFlow**：嵌入模型 + Rerank 模型
-- **Ollama**：本地 L0/L3 Guard 分类模型 + Query Rewrite 改写模型
+- **DeepSeek**：主聊天模型 + 检索 Agent（ReactAgent / RetrievalAgent）+ L0/L3 Guard 分类器
+- **SiliconFlow**：嵌入模型 + Rerank 模型 + Query Rewrite / 主题摘要 / 主题路由 / 长期记忆提取
 - **PyYAML**：YAML 配置加载
 - **PyPDF**：PDF 解析
 - **httpx**：Rerank HTTP 客户端
@@ -255,7 +254,7 @@ FastAPI_chunking/
 │  ├─ rag_service.py           # RAG 编排（改写 → 检索 → sources → 格式化）
 │  ├─ vector_store.py          # PGVector 文档入库与向量检索
 │  └─ model/
-│     ├─ factory.py            # 模型工厂（聊天 / 嵌入 / Rerank / Ollama）
+│     ├─ factory.py            # 模型工厂（聊天 / 嵌入 / Rerank / 改写）
 │     └─ reranker.py           # SiliconFlow /v1/rerank HTTP 客户端
 │
 ├─ config/                     # YAML 配置（已纳入版本管理）
@@ -321,7 +320,7 @@ FastAPI_chunking/
 
 - Python 3.13+
 - PostgreSQL 数据库（需手动启用 PGVector 扩展）
-- 可访问的模型服务（DeepSeek / SiliconFlow / 本地 Ollama）
+- 可访问的模型服务（DeepSeek / SiliconFlow）
 
 ### 数据库准备
 
@@ -335,14 +334,15 @@ psql -h <host> -U <user> -d <dbname> -c "CREATE EXTENSION IF NOT EXISTS vector;"
 
 | 用途 | 模型 | 服务商 | 接入方式 |
 |------|------|--------|---------|
-| 主 Agent（L2） | `deepseek-v4-flash` | DeepSeek | `DEEPSEEK_API_KEY`（系统环境变量） |
-| 检索 Agent（L1） | `deepseek-v4-flash` | DeepSeek | 复用 `DEEPSEEK_API_KEY` |
+| 主 Agent（L2） | `deepseek-flash` | DeepSeek | `DEEPSEEK_API_KEY`（系统环境变量） |
+| 检索 Agent（L1） | `deepseek-flash` | DeepSeek | 复用 `DEEPSEEK_API_KEY` |
+| L0/L3 Guard | `deepseek-flash` | DeepSeek | 复用 `DEEPSEEK_API_KEY` |
 | 嵌入 | `BAAI/bge-m3` | SiliconFlow | `SILICONFLOW_API_KEY`（系统环境变量） |
 | Rerank | `BAAI/bge-reranker-v2-m3` | SiliconFlow | 复用 `SILICONFLOW_API_KEY` |
-| L0/L3 Guard | `qwen3.5:4b` | Ollama（本地） | 需本地启动 Ollama（`localhost:11434`） |
-| Query Rewrite | `qwen3.5:4b`（ChatOllama） | Ollama（本地） | 复用上述 Ollama 服务 |
+| Query Rewrite | `Qwen/Qwen2.5-7B-Instruct` | SiliconFlow | 复用 `SILICONFLOW_API_KEY` |
+| 主题摘要 / 路由 / 记忆提取 | `Qwen/Qwen2.5-7B-Instruct` | SiliconFlow | 复用 `SILICONFLOW_API_KEY` |
 
-> **注意**：L0 域内预检、L3 兜底分类器与 Query Rewrite 均依赖本地 Ollama 服务。若 Ollama 未启动：L0/L3 会静默放行（解析失败默认 IN），越界拦截失效；Query Rewrite 会回退为原始 query。请确保部署环境已启动 `ollama serve` 并拉取 `qwen3.5:4b`。
+> **注意**：L0 域内预检、L3 兜底分类器与主/检索 Agent 走 DeepSeek（`DEEPSEEK_API_KEY`），Query Rewrite、主题摘要、主题路由与长期记忆提取走 SiliconFlow（`SILICONFLOW_API_KEY`）。若对应 API 不可达或调用异常：L0/L3 会静默放行（解析失败默认 IN），越界拦截失效；Query Rewrite 回退为原始 query，主题路由进入受限降级，摘要失败保留旧摘要。请确保两个 API Key 有效且服务可达。
 
 ---
 
@@ -362,8 +362,8 @@ DB=vectordb
 
 ### 2. 系统环境变量
 
-- `SILICONFLOW_API_KEY`：用于嵌入、Rerank 模型（**不能放 `.env`**）
-- `DEEPSEEK_API_KEY`：用于主聊天模型（ReactAgent）与检索 Agent（RetrievalAgent）
+- `SILICONFLOW_API_KEY`：用于嵌入、Rerank、Query Rewrite、主题摘要、主题路由与长期记忆提取（**不能放 `.env`**）
+- `DEEPSEEK_API_KEY`：用于主聊天模型（ReactAgent）、检索 Agent（RetrievalAgent）与 L0/L3 Guard 分类器
 - `API_KEYS`：API 鉴权密钥，逗号分隔多个 key（可放 `.env` 或系统环境变量）；未配置时所有 `/api/*` 接口不鉴权
 
 ### 3. `config/pgvector.yml`
@@ -378,11 +378,13 @@ DB=vectordb
 
 ### 4. `config/rag.yml`
 
-- `chat_model_name`：Agent 主模型 / 检索 Agent 模型（默认 `deepseek-v4-flash`，DeepSeek）
+- `chat_model_name`：Agent 主模型 / 检索 Agent / L0-L3 Guard 模型（默认 `deepseek-flash`，DeepSeek）
 - `embedding_model_name`：嵌入模型（默认 `BAAI/bge-m3`，SiliconFlow）
+- `rewrite_model_name`：Query Rewrite / 主题摘要 / 主题路由 / 长期记忆提取模型（默认 `Qwen/Qwen2.5-7B-Instruct`，SiliconFlow）
 - `rerank_model_name` / `rerank_top_n` / `rerank_score_min`：Rerank 配置
 - `retrieval_cache_maxsize` / `retrieval_cache_ttl`：检索结果缓存
-- `query_rewrite_enabled`：是否启用检索词改写（改写走本地 Ollama）
+- `query_rewrite_enabled`：是否启用检索词改写（改写走 SiliconFlow）
+- `siliconflow_base_url` / `deepseek_base_url`：模型服务 base_url
 
 ### 5. `config/database.yml`
 
@@ -596,7 +598,7 @@ uvicorn main:app --reload
 
 ### 6. 越界问题被放行 / L0 拦截失效怎么办？
 
-检查本地 Ollama 是否已启动（`ollama serve`）且已拉取 `qwen3.5:4b` 模型。Ollama 未启动时，L0/L3 会静默放行（解析失败默认 IN），越界拦截将失效。
+L0/L3 Guard 走 DeepSeek（`DEEPSEEK_API_KEY`）。检查该 Key 是否有效、DeepSeek 服务是否可达。API 调用异常时，L0/L3 会静默放行（解析失败默认 IN），越界拦截将失效。
 
 ### 7. 接口返回 401 怎么办？
 

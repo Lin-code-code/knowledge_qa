@@ -30,14 +30,6 @@ def test_api_does_not_import_repositories_or_orm():
         assert "db.models" not in source
 
 
-def test_old_repository_modules_are_removed():
-    root = Path(__file__).resolve().parents[1] / "db"
-    assert not (root / "conversation_repo.py").exists()
-    assert not (root / "topic_repo.py").exists()
-    assert not (root / "memory_repo.py").exists()
-    assert not (root / "file_repo.py").exists()
-
-
 def test_document_service_factory_does_not_build_vector_store():
     """列表/删除路由不涉及向量库：组合根在该路径上不得构造向量库客户端。
 

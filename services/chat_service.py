@@ -54,11 +54,6 @@ class ChatService:
         self.chat_agent = chat_agent
         self.summary_agent = summary_agent
         self.memory_enabled = bool(db_conf.get("conversation_memory_enabled", True))
-        self.router_enabled = bool(db_conf.get("topic_router_enabled", True))
-        self.long_term_memory_enabled = bool(
-            db_conf.get("long_term_memory_enabled", True)
-        )
-        self.summary_enabled = bool(db_conf.get("summary_enabled", True))
 
     async def process_message(
         self,
@@ -154,7 +149,8 @@ class ChatService:
                 active_topic,
                 decision,
             )
-            if active_topic is not None and decision.action != TopicAction.NEW_TOPIC:
+            # 切到新主题时同样重取：新主题尚无消息，返回空即旧主题历史不进入新上下文。
+            if active_topic is not None:
                 recent_records = await self.conversations.get_recent_topic_messages(
                     active_topic.id
                 )
@@ -254,7 +250,7 @@ class ChatService:
             memory_eligible=not mixed_has_out,
         )
 
-        if self.summary_enabled and active_topic is not None:
+        if self.summary_agent is not None and active_topic is not None:
             await self._update_summary(
                 active_topic,
                 effective_query,

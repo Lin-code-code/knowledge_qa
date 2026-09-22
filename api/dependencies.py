@@ -23,45 +23,38 @@ from services.memory_service import MemoryService
 from services.topic_service import TopicService
 
 
-def _repositories(db: AsyncSession):
-    return (
+def get_conversation_service(db: AsyncSession = Depends(get_db)) -> ConversationService:
+    return ConversationService(
         SqlAlchemyConversationRepository(db),
         SqlAlchemyTopicRepository(db),
-        SqlAlchemyMemoryRepository(db),
     )
 
 
-def get_conversation_service(db: AsyncSession = Depends(get_db)) -> ConversationService:
-    conversations, topics, _ = _repositories(db)
-    return ConversationService(conversations, topics)
-
-
 def get_topic_service(db: AsyncSession = Depends(get_db)) -> TopicService:
-    conversations, topics, _ = _repositories(db)
-    return TopicService(conversations, topics)
+    return TopicService(
+        SqlAlchemyConversationRepository(db),
+        SqlAlchemyTopicRepository(db),
+    )
 
 
 def get_memory_service(db: AsyncSession = Depends(get_db)) -> MemoryService:
-    _, _, memories = _repositories(db)
     enabled = bool(db_conf.get("conversation_memory_enabled", True)) and bool(
         db_conf.get("long_term_memory_enabled", True)
     )
     extractor = get_memory_extractor() if enabled else None
-    return MemoryService(memories, extractor)
+    return MemoryService(SqlAlchemyMemoryRepository(db), extractor)
 
 
 def get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
-    conversations, topics, memories = _repositories(db)
-    memory_enabled = bool(db_conf.get("conversation_memory_enabled", True))
-    long_term_enabled = bool(db_conf.get("long_term_memory_enabled", True))
     memory_service = (
-        MemoryService(memories, get_memory_extractor())
-        if memory_enabled and long_term_enabled
+        MemoryService(SqlAlchemyMemoryRepository(db), get_memory_extractor())
+        if db_conf.get("conversation_memory_enabled", True)
+        and db_conf.get("long_term_memory_enabled", True)
         else None
     )
     return ChatService(
-        conversations=conversations,
-        topics=topics,
+        conversations=SqlAlchemyConversationRepository(db),
+        topics=SqlAlchemyTopicRepository(db),
         memory_service=memory_service,
         context_builder=ContextBuilder(),
         topic_router=get_topic_router() if db_conf.get("topic_router_enabled", True) else None,

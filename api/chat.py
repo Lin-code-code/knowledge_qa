@@ -53,10 +53,7 @@ async def get_chat_messages(
     conversation_id: str,
     service: ConversationService = Depends(get_conversation_service),
 ):
-    try:
-        conv_uuid = uuid.UUID(conversation_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="conversation_id 格式无效")
+    conv_uuid = _parse_uuid(conversation_id, "conversation_id")
 
     msgs = await service.get_messages(conv_uuid)
     return MessageListResponse(
@@ -94,12 +91,7 @@ async def chat(
     if not request.message or not request.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")
 
-    conv_uuid = None
-    if request.chatId:
-        try:
-            conv_uuid = uuid.UUID(request.chatId)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="chatId 格式无效")
+    conv_uuid = _parse_uuid(request.chatId, "chatId") if request.chatId else None
 
     try:
         result = await service.process_message(
@@ -226,10 +218,7 @@ async def delete_chat(
     chat_id: str,
     service: ConversationService = Depends(get_conversation_service),
 ):
-    try:
-        conv_uuid = uuid.UUID(chat_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="conversation_id 格式无效")
+    conv_uuid = _parse_uuid(chat_id, "conversation_id")
 
     deleted = await service.delete(conv_uuid)
 
