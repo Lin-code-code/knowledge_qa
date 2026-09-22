@@ -2,7 +2,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 
-from api.dependencies import get_document_service
+from api.dependencies import get_document_service, get_upload_document_service
 from core.security import require_api_key
 from domain.errors import (
     DocumentIndexError,
@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/files", tags=["Files"], dependencies=[Depends(re
 @router.post("/upload")
 async def upload_and_split(
     file: UploadFile = File(...),
-    service: DocumentService = Depends(get_document_service),
+    service: DocumentService = Depends(get_upload_document_service),
 ):
     try:
         result = await service.upload(file.filename or "", file)

@@ -71,13 +71,17 @@ def get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
     )
 
 
-def get_document_service(
+def get_document_service(db: AsyncSession = Depends(get_db)) -> DocumentService:
+    return DocumentService(SqlAlchemyFileRepository(db), VectorStoreService())
+
+
+def get_upload_document_service(
     db: AsyncSession = Depends(get_db),
     chunk_size: int = pg_conf["chunk_size"],
     chunk_overlap: int = pg_conf["chunk_overlap"],
 ) -> DocumentService:
-    # chunk_size / chunk_overlap 声明在依赖上，FastAPI 会将其扁平化为上传路由的查询参数，
-    # 保证与旧 api/documents.py 的对外契约逐字一致（调用方可覆盖默认分片参数）。
+    # chunk_size / chunk_overlap 只声明在上传依赖上：FastAPI 会把依赖参数扁平化为路由查询参数，
+    # 故必须与不使用分片参数的 list/delete 依赖分开，避免这两个参数泄漏到它们的对外契约里。
     return DocumentService(
         SqlAlchemyFileRepository(db),
         VectorStoreService(chunk_size, chunk_overlap),
