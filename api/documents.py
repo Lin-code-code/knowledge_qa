@@ -1,109 +1,62 @@
-import asyncio
-import os, uuid, hashlib
-from fastapi import APIRouter, File, HTTPException, UploadFile, Depends
+from uuid import UUID
 
-from sqlalchemy.ext.asyncio import AsyncSession
-from db.session import get_db
-from rag.vector_store import VectorStoreService
-from core.config import pg_conf
-from core.paths import get_abs_path
-from core.validators import validate_file_extension
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+
+from api.dependencies import get_document_service
 from core.security import require_api_key
-from db.file_repo import FileRepository
+from domain.errors import (
+    DocumentIndexError,
+    DocumentNotFoundError,
+    DuplicateDocumentError,
+    EmptyDocumentError,
+    UnsupportedDocumentTypeError,
+)
+from services.document_service import DocumentService
 
 router = APIRouter(prefix="/api/files", tags=["Files"], dependencies=[Depends(require_api_key)])
 
+
 @router.post("/upload")
 async def upload_and_split(
-        file: UploadFile = File(...),
-        chunk_size: int = pg_conf["chunk_size"],
-        chunk_overlap: int = pg_conf["chunk_overlap"],
-        db: AsyncSession = Depends(get_db),
+    file: UploadFile = File(...),
+    service: DocumentService = Depends(get_document_service),
 ):
-    filename = file.filename or ""
-    if not filename:
-        raise HTTPException(status_code=400, detail="未检测到上传文件名")
-
-    allowed_types = {t.lower().lstrip(".") for t in pg_conf.get("allow_knowledge_file_type", [])}
     try:
-        extension = validate_file_extension(filename, allowed_types)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-    temp_path = ""
-    vs = VectorStoreService(chunk_size, chunk_overlap)
-    try:
-        data_dir = get_abs_path(pg_conf["data_path"])
-        os.makedirs(data_dir, exist_ok=True)
-
-        file_id = uuid.uuid4().hex
-        saved_filename = f"{file_id}.{extension}"
-        temp_path = os.path.join(data_dir, saved_filename)
-
-        md5_hash = hashlib.md5()
-        file_size = 0
-        with open(temp_path, "wb") as f:
-            while chunk := await file.read(8192):
-                f.write(chunk)
-                md5_hash.update(chunk)
-                file_size += len(chunk)
-
-        if file_size == 0:
-            raise HTTPException(status_code=400, detail="上传文件为空")
-
-        file_md5_hex = md5_hash.hexdigest()
-
-        repo = FileRepository(db)
-        exist_file = await repo.get_by_md5(md5_hex=file_md5_hex)
-        if exist_file is not None:
-            raise HTTPException(status_code=400, detail="文件已存在于向量库中！")
-
-        # 向量写入（同步 PGVector，走线程池避免阻塞事件循环）
-        added_ids = await asyncio.to_thread(vs.load_document, file_id, target_path=temp_path)
-        if added_ids is None:
-            raise HTTPException(status_code=500, detail="文件解析、切分并写入向量库失败")
-
-        # 记录元数据；失败时补偿删除刚写入的向量（跨存储无法原子，补偿 + 对账脚本兜底）
-        try:
-            newfile = await repo.save(
-                file_id=file_id,
-                filename=filename,
-                md5_hex=file_md5_hex,
-                file_size=file_size // 1024,
-            )
-        except Exception:
-            await asyncio.to_thread(vs.delete_documents, added_ids)
-            raise
-
-        return {
-            "message": "文件解析、切分并写入向量库成功",
-            "filename": filename,
-            "chunks": added_ids,
-            "file_id": newfile.id
-        }
-    except HTTPException:
-        raise
+        result = await service.upload(file.filename or "", file)
+    except UnsupportedDocumentTypeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except EmptyDocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except DuplicateDocumentError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except DocumentIndexError as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
     finally:
         await file.close()
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
+
+    return {
+        "message": "文件解析、切分并写入向量库成功",
+        "filename": result.file.filename,
+        "chunks": result.chunks,
+        "file_id": str(result.file.id),
+    }
 
 
 @router.get("/list")
-async def list_uploaded_files(db: AsyncSession = Depends(get_db)):
-    repo = FileRepository(db)
-    files = await repo.list_all()
+async def list_uploaded_files(service: DocumentService = Depends(get_document_service)):
+    files = await service.list_all()
     return {"files": files}
 
 
 @router.delete("/{file_id}")
-async def delete_uploaded_file(file_id: str, db: AsyncSession = Depends(get_db)):
-    repo = FileRepository(db)
-
-    # 先删主记录（不存在则 404，不动向量）；向量删除与记录删除在同一事务，任一步失败整体回滚
-    deleted = await repo.delete_by_id(file_id=file_id)
-    if not deleted:
+async def delete_uploaded_file(
+    file_id: str,
+    service: DocumentService = Depends(get_document_service),
+):
+    # file_id 保持 str 类型以维持 OpenAPI 契约；非法 UUID 由 UUID() 抛出 ValueError，
+    # 经 main.py 全局异常处理器返回 500，与旧实现（裸串直达 SQLAlchemy/asyncpg）行为一致。
+    try:
+        await service.delete(UUID(file_id))
+    except DocumentNotFoundError:
         raise HTTPException(status_code=404, detail="文件记录不存在")
-
-    await repo.delete_vector_embeddings(file_id=file_id.replace("-", ""))
     return {"message": "文件记录已删除"}

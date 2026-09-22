@@ -15,6 +15,52 @@
 
 ---
 
+## [2026-09-22] 后端分层重构 Task 8：DocumentService 与文件 API 迁移
+
+### 改动标题
+新建应用服务 `DocumentService`，把旧 `api/documents.py` 的上传/列表/删除业务流程（扩展名校验、流式落盘算 MD5、按 MD5 去重、向量写入与失败补偿、元数据保存）整体迁移到 `services/`；`api/documents.py` 只保留 HTTP 职责（参数绑定与领域异常 → 状态码映射）；`api/dependencies.py` 新增 `get_document_service` 组合根依赖。
+
+### 改动文件清单
+新建：
+- `services/document_service.py` — `DocumentUploadResult`（dataclass，`file` + `chunks`）与 `DocumentService`（`upload` / `list_all` / `delete`）；导入根仅 `asyncio`/`core`/`dataclasses`/`domain`/`hashlib`/`pathlib`/`uuid`，不导入 `db`/`api`/`rag`/FastAPI/SQLAlchemy/`agent`
+- `tests/test_document_service.py` — 简报给定的失败测试（补上简报遗漏的 `from services.document_service import DocumentService`，见"关键设计决策"第 6 条）
+
+修改：
+- `api/documents.py` — 删除 `asyncio`/`os`/`uuid.hex`/`hashlib`/`AsyncSession`/`get_db`/`FileRepository`/`VectorStoreService`/`pg_conf`/`get_abs_path`/`validate_file_extension` 导入与全部业务逻辑；三个路由改为 `Depends(get_document_service)`；领域异常映射为既有中文 400/404/500 文案
+- `api/dependencies.py` — 导入 `SqlAlchemyFileRepository`、`VectorStoreService`、`DocumentService`、`pg_conf`；新增 `get_document_service(db, chunk_size, chunk_overlap)`
+- `changelog.md` — 追加本次进度记录
+
+未修改 `models/`、`db/*_repo.py`、`services/{guard_service,summary_service,topic_router}.py` 三个 shim、`domain/`、`db/`、`README.md`、`AGENTS.md`、边界测试（均为 Task 9 范围）。
+
+无需更新 `README.md`：`/api/files/*` 的路径、方法、查询参数、请求/响应字段、状态码与中文文案全部未变。
+
+### 关键设计决策与理由
+1. **（有意偏离简报 Step 4）`chunk_size` / `chunk_overlap` 声明在依赖函数签名上**：旧路由把这两个查询参数暴露给调用方，若按简报只写 `get_document_service(db)`，它们会从 OpenAPI 与参数绑定中彻底消失（调用方传了被静默忽略），属对外契约回退。FastAPI 会把依赖函数的参数扁平化为路由查询参数，故写在 `get_document_service` 上即可逐字保留名称与默认值，与 Task 7 先例同类。实证：OpenAPI `paths./api/files/upload.post.parameters` 含 `chunk_size`(integer, default 200)、`chunk_overlap`(integer, default 20)，且实测 `?chunk_size=64&chunk_overlap=8` 上传成功。**请审查者裁决此偏离。**
+2. **`upload()` 用 `if not added_ids`（简报写法），与旧 `if added_ids is None` 的差异不可达**：`VectorStoreService.load_document` 仅在"路径为 None / 文档为空 / 分片为空 / 抛异常"时返回 `None`，成功路径 `add_documents` 的 `chunk_ids` 至少 1 个（分片非空），因此 `[]` 在所有可达路径上不可达，两种写法等价。
+3. **（有意偏离简报 Step 5）非法 UUID 保持 500，不改 400**：简报称"非法 UUID 保持 400"，但旧路由签名为 `file_id: str`，裸串直达 `Column(UUID(as_uuid=True))`，由 asyncpg 抛错，经 `main.py` 全局 `Exception` 处理器返回 500。实测（真实数据库）：`FileRepository.delete_by_id('abc')` 抛 `sqlalchemy.exc.DBAPIError`（`asyncpg.exceptions.DataError: invalid input for query argument $1: 'abc' ...`），而合法但不存在的 UUID 返回 `False` → 404。故保持 `file_id: str` 路径参数，路由内 `UUID(file_id)` 转换失败同样抛 `ValueError` → 500，状态码与响应体（`{"detail":"服务器内部错误，请稍后重试"}`）与旧实现逐字一致。全局约束"不改对外 HTTP 契约"优先于简报示例。**请审查者裁决此偏离。**
+4. **响应与文案逐条保留**：上传成功四字段 `message`/`filename`/`chunks`/`file_id`（`message` 为"文件解析、切分并写入向量库成功"，`file_id` 为带连字符 UUID 串）、`file_size // 1024` 整除截断、删除成功 `{"message":"文件记录已删除"}`、404 文案"文件记录不存在"、router 上的 `dependencies=[Depends(require_api_key)]`、上传路由 `finally` 中的 `await file.close()`（服务内 `finally` 负责删临时文件）。
+5. **临时文件与向量 id 语义不变**：旧 `file_id = uuid.uuid4().hex` 同时用作临时文件名与向量元数据 `file_id`；新写法 `file_id = uuid4()` + `index_file_id = file_id.hex`，`load_document` 收到同一 hex；旧 `delete_vector_embeddings(file_id.replace("-",""))` 与新 `delete_index_records(file_id.hex)` 等价。
+6. **补齐简报测试遗漏的 import**：简报 Step 1 的测试代码直接使用 `DocumentService` 但未导入该模块（不补则 RED 为 `NameError` 而非简报预期的 `ModuleNotFoundError`）。已补 `from services.document_service import DocumentService`，其余测试代码逐字未改。
+7. **依赖注入带来的构造时序差异（已知、低危）**：依赖在路由体之前解析，故 `VectorStoreService()`（读取 `SILICONFLOW_API_KEY`、建 PGVector 连接串）现在先于扩展名校验构造。旧代码先校验扩展名再构造。仅在 `SILICONFLOW_API_KEY` 缺失的部署下才有可观察差异（旧：错误扩展名返回 400；新：构造依赖失败返回 500），属该部署下所有上传均已不可用的场景，本次未做额外处理。
+
+### 遗留事项 / 待办
+- Task 9 待办：删除 `services/{guard_service,summary_service,topic_router}.py` 三个 shim、旧 `db/*_repo.py` 与 `models/` 兼容层。
+- 两处偏离简报之处（决策 1、3）需审查者裁决。
+
+### 验证方式与结果
+- TDD RED：`uv run --cache-dir .uv-cache pytest tests/test_document_service.py -q` → `ModuleNotFoundError: No module named 'services.document_service'`，`1 error in 0.13s`（与简报预期一致）。
+- 聚焦 GREEN：`uv run --cache-dir .uv-cache pytest tests/test_document_service.py -q` → `1 passed in 0.06s`。
+- 全量回归：`uv run --cache-dir .uv-cache pytest tests -q` → `63 passed, 1 warning in 1.00s`。计数 62→63 的增量来源即本任务新增的 `tests/test_document_service.py`（基线 62 已含 Task 7 修复回合新增的 `test_create_conversation_always_creates_default_topic`）；警告仍是既有的 `langgraph.checkpoint.serde.encrypted` 待弃用提示。
+- 契约实证（风险 a）：`app.openapi()['paths']['/api/files/upload']['post']['parameters']` 输出 `chunk_size query integer default=200`、`chunk_overlap query integer default=20`、`x-api-key header`；dependant 树中 `get_document_service` 节点含 `QUERY chunk_size 200` / `QUERY chunk_overlap 20`。
+- 契约实证（风险 c，真实数据库直连）：`FileRepository.delete_by_id('abc')` → `sqlalchemy.exc.DBAPIError`（asyncpg DataError，invalid UUID）；`delete_by_id('00000000-0000-0000-0000-000000000000')` → `False`（即 404 路径）。
+- 端到端契约冒烟（`TestClient` + 真实数据库，测试数据已清理）：错误扩展名 400；空文件 400（文案逐字相等）；上传 200 且字段为 `chunks`/`file_id`/`filename`/`message`，`message` 与 `filename` 逐字相等，`chunks[0]` 形如 `{32位hex}-chunk0`，`file_id` 为 36 位带连字符 UUID；同内容二次上传 400（"文件已存在于向量库中！"）；`GET /api/files/list` 200 且元素键序 `id`/`filename`/`size`/`chunks`；`DELETE` 200（"文件记录已删除"）；再次 `DELETE` 404（"文件记录不存在"）；带 `?chunk_size=64&chunk_overlap=8` 上传 200。清理后校验：两个测试 `file_id` 的 `langchain_pg_embedding` 残留为 0、`uploaded_files` 残留为 0、`data/` 无遗留临时文件。
+- 边界自证：AST 扫描 `services/document_service.py`，导入根为 `['asyncio','core','dataclasses','domain','hashlib','pathlib','uuid']`，与 `{db, api, fastapi, sqlalchemy, agent, rag}` 无交集，输出 `boundary self-check passed`。
+- 导入自证：`grep -nE "asyncio|os|hashlib|sqlalchemy|db\.|rag\." api/documents.py` 无任何匹配（仅保留 `from uuid import UUID` 这一标准库类型导入，用于构造简报约定的 `DocumentService.delete(file_id: UUID)` 入参）。
+- 事务硬规则：`grep -rn "\.commit()" db/ services/ api/` 仅命中 `db/session.py:8`（受认可的事务边界），仓储内无 `commit()`。
+- 编译检查：4 个改动 Python 文件 `uv run --cache-dir .uv-cache python -m py_compile` 全部通过。
+
+---
+
 ## [2026-09-22] 后端分层重构 Task 7：ChatService、API 组合根与聊天路由迁移
 
 ### 改动标题

@@ -6,16 +6,19 @@ from agent.guard_agent import get_guard_agent
 from agent.memory_agent import get_memory_extractor
 from agent.summary_agent import get_summary_agent
 from agent.topic_router import get_topic_router
-from core.config import db_conf
+from core.config import db_conf, pg_conf
 from db.repositories import (
     SqlAlchemyConversationRepository,
+    SqlAlchemyFileRepository,
     SqlAlchemyMemoryRepository,
     SqlAlchemyTopicRepository,
 )
 from db.session import get_db
+from rag.vector_store import VectorStoreService
 from services.chat_service import ChatService
 from services.context_builder import ContextBuilder
 from services.conversation_service import ConversationService
+from services.document_service import DocumentService
 from services.memory_service import MemoryService
 from services.topic_service import TopicService
 
@@ -65,4 +68,17 @@ def get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
         guard=get_guard_agent(),
         chat_agent=get_chat_agent(),
         summary_agent=get_summary_agent() if db_conf.get("summary_enabled", True) else None,
+    )
+
+
+def get_document_service(
+    db: AsyncSession = Depends(get_db),
+    chunk_size: int = pg_conf["chunk_size"],
+    chunk_overlap: int = pg_conf["chunk_overlap"],
+) -> DocumentService:
+    # chunk_size / chunk_overlap 声明在依赖上，FastAPI 会将其扁平化为上传路由的查询参数，
+    # 保证与旧 api/documents.py 的对外契约逐字一致（调用方可覆盖默认分片参数）。
+    return DocumentService(
+        SqlAlchemyFileRepository(db),
+        VectorStoreService(chunk_size, chunk_overlap),
     )
