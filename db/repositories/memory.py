@@ -74,6 +74,10 @@ class SqlAlchemyMemoryRepository:
         row.expires_at = expires_at
         row.status = "active"
         row.updated_at = func.now()
+        # 与插入分支同理：func.now() 是 SQL 表达式而非 datetime，必须 flush 后 refresh 才能取回真实值，
+        # 否则端口声明的 MemoryItem.updated_at 会变成表达式对象（调用方 .isoformat() 会报 AttributeError）。
+        await self.session.flush()
+        await self.session.refresh(row)
         return to_memory_item(row)
 
     async def delete_one(self, user_id: str, memory_id: UUID) -> bool:

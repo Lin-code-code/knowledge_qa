@@ -64,10 +64,10 @@ class VectorStoreService:
             return
         self.vector_store.delete(ids=ids)
 
-    def load_document(self, file_id: str, target_path: str):
+    def load_document(self, file_id: str, target_path: str) -> list[str] | None:
         """
             加载当个文件
-        :return: None
+        :return: 写入成功的 chunk id 列表；解析/切分/写入失败返回 None
         """
         def get_file_document(file_path: str):
             if file_path.endswith(".pdf"):

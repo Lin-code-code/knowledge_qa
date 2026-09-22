@@ -21,20 +21,31 @@
 将后端从 API/Service 直接依赖 Repository/ORM 的结构迁移为 domain/service/db/api 四层，并保持外部契约兼容。本条是 Task 1-8 的**总结记录**，逐任务细节见下方各 Task 条目。
 
 ### 改动文件清单
-新建 `domain/`、`db/models/`、`db/mappers.py`、`db/repositories/`、`api/dependencies.py`、应用服务和架构边界测试；迁移 Agent/RAG 适配器；删除旧 `models/` 和 `db/*_repo.py`（Task 9 另删 `services/{guard_service,summary_service,topic_router}.py` 三个临时转发 shim）。
+新建 `domain/`、`db/models/`、`db/mappers.py`、`db/repositories/`、`api/dependencies.py`、应用服务和架构边界测试；迁移 Agent/RAG 适配器；删除旧 `models/` 和 `db/*_repo.py`（Task 9 另删 `services/{guard_service,summary_service,topic_router}.py` 三个临时转发 shim）。全分支审查后的收尾提交另改：`db/repositories/memory.py`（更新分支补 `flush()`+`refresh()`）、`domain/decisions.py`（删未使用导入）、`rag/vector_store.py`（补返回标注）、`config/database.yml`（**仅注释**，键与默认值未变）、`README.md`（删多余的分隔线）。
 
 ### 关键设计决策与理由
 兼容优先；domain 不依赖框架；Repository 返回领域实体且不提交事务（事务边界由 `db/session.py:get_db` 持有）；API 通过组合根 `api/dependencies.py` 注入 Service；AI/RAG 作为端口适配器；边界由 `tests/test_architecture_boundaries.py` 冻结。
 
 ### 遗留事项 / 待办
-无。已知覆盖缺口（待裁决，未擅自改动）：边界测试的 `forbidden` 集合为 `{api, db, fastapi, sqlalchemy, agent, rag}`，不含 `schemas`；`services/` 目前不导入 `schemas`，但将来若导入 HTTP DTO 不会被拦住。
+本次全分支审查（`45e8a45..383940f`，独立审查者）结论 **APPROVE**（0 Critical / 2 Important / 9 Minor）。两条 Important 均经真实 PostgreSQL 复现确认为**基线既有行为、非本次回归**，处置如下：
+- upsert 更新分支返回的 `MemoryItem.updated_at` 曾是 SQL 表达式（`func.now()`）而非 `datetime`，与端口声明不符 → **已修**（`db/repositories/memory.py` 更新分支补 `flush()`+`refresh()`，与同一函数的插入分支写法一致）。该修复无自动化守卫：仓储层目前没有 fake-session 测试装置（插入分支的同类写法同样未被覆盖），本次由审查者在真实 PG 上验证；补该装置属独立工作。
+- 上传链条的补偿删除自身失败时会顶掉原始异常 → **接受不改**：`api/documents.py` 只映射 `DocumentIndexError`，两种情况对外都是同一个 500 与同一文案（异常文本无变化），且该补偿块与基线 `api/documents.py` 逐字等价，改动属行为变更、超出本次"零契约变更"范围；诊断线索仍在 `__context__`。
+其余已接受项（不阻塞，未改）：`MemoryNotFoundError` 按设计规格保留但全仓零引用；端口未加 `@runtime_checkable`（运行期零强制）；`api/dependencies.py` 与 `ChatService.__init__` 各读一遍相同的功能开关（两个真相源，实测漂移可自愈）；仓储返回的默认值字段依赖 PG `RETURNING` 回填，无集成测试覆盖。
+已知覆盖缺口（未擅改）：边界测试的 `forbidden` 集合为 `{api, db, fastapi, sqlalchemy, agent, rag}`，不含 `schemas`；`services/` 目前不导入 `schemas`，但将来若导入 HTTP DTO 不会被拦住。`_imports` 的 AST 方案对 `from . import X` 与 `importlib` 动态导入有盲区（当前代码无此类写法，全仓亦无相对导入）。
 
 ### 验证方式与结果
-- 全量测试：`uv run --cache-dir .uv-cache pytest tests -q` → **72 passed, 1 warning in 1.17s**（1 warning 仍为既有 `langgraph.checkpoint.serde.encrypted` 的 LangChainPendingDeprecationWarning）。
+- 全量测试：`uv run --cache-dir .uv-cache pytest tests -q` → **72 passed, 1 warning**（1 warning 仍为既有 `langgraph.checkpoint.serde` 的 LangChainPendingDeprecationWarning）。
 - 编译检查：`uv run --cache-dir .uv-cache python -m compileall -q main.py api services domain db agent rag core schemas utils` → 退出码 **0**。
 - 装配冒烟：`python -c "from main import app; print(sorted({r.path for r in app.routes}))"` → 打印 18 条路径（含 `/`、`/docs`、`/openapi.json`、`/redoc`、`/static`），无 import/装配异常。
 - 空白检查：`git diff --check` → 无空白错误行（仅 git 对本次编辑文件的 `LF will be replaced by CRLF` 提示，`core.autocrlf=true` 的常规行为）。
 - **全分支零契约变更终验**：AST 解析 `45e8a45`（重构前基线）与 HEAD 各自 `api/` 下的 `APIRouter(prefix=...)` + `@router.<method>("<path>")`，展开为 `(方法, 完整路径)` 集合 —— 两侧均 **14 条**、`symmetric_difference` 为 `[]`（差集为空）。
+- **全分支审查（`45e8a45..383940f`，独立审查者，结论 APPROVE）**的独立实测项：
+  - 分层方向：全仓 84 个模块（65 生产 + 19 测试）AST 导入图，反向边仅 `api/dependencies -> db.repositories`/`db.session` 一条（设计规格明文授权的唯一组合根）；`domain/` 导入根仅标准库与 `domain.*`；全仓无相对导入、无 `importlib`/`__import__` 动态导入；逐模块 `sys.modules` 探针确认各包 `__init__.py` 为空、无重导出间接牵引。
+  - 事务边界：`db/repositories/**` 零 `commit()`/`begin()`/`close()`，应用代码中唯一事务边界位于 `db/session.py`（`scripts/` 内裸 psycopg `conn.commit()` 属独立运维脚本，非请求链路）；引擎与 session 工厂各一处，全仓无 `AsyncSession(` 直接实例化；探针路由实测每请求恰好 1 次 `get_db`，三个 Service 内部的仓储共享同一 session 对象。
+  - 端口契合度：11 个 Protocol 逐方法对实现做双向签名比对（参数名序列 / 参数 kind / 默认值有无 / 是否协程）零 mismatch；无孤儿方法、无把端口当具体类型的鸭子破坏。
+  - 死代码与残留：84 个模块全部可导入，`__all__` 无指向已删名字的条目；零调用者的公开成员仅 `MemoryNotFoundError`（规格要求保留）与一处未使用导入（本次已删）。
+  - 表结构与配置键：`db/models/*` 与基线 `models/*` 逐字节相同（唯一差异是 `from models.base` → `from db.models.base` 的导入行），并用活库 `information_schema` + `pg_indexes` 交叉验证 5 张表全列与 17 个索引；`core/config.py` 与 `config/*.yml` 的键名与默认值集合与基线全等（`git diff 45e8a45..HEAD -- core/config.py config/` 为空）。
+  - 对照实验：`DocumentService` 跨存储失败矩阵、真实 PG 上的仓储往返与部分唯一索引 `uq_topics_one_active` 生效（全程事务内并 `rollback()`，事后校验零残留）、依赖注入开关漂移（仅告警不崩）。
 
 ---
 

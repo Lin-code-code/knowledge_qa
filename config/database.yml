@@ -8,8 +8,9 @@ pool_recycle: 3600
 pool_pre_ping: true
 
 # 对话管理配置
-# max_messages: 从 DB 取出的最大历史消息条数（仅控制 DB 查询量）。
-# 注意：conversation_repo.py 的 MAX_MESSAGES 是模块级常量，改此项需重启服务才生效。
+# max_messages / max_tokens: 从 DB 取出的最大历史消息条数与 token 上限。
+# 注意：分层重构后已无代码读取这两个键（原读取方随旧仓储删除），保留键名以兼容既有配置；
+# 上下文长度上限现由 context_max_tokens 控制（见文件末尾）。
 max_messages: 8
 max_tokens: 2000
 llm_max_concurrency: 50

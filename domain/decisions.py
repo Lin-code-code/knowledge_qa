@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from domain.enums import ScopeLabel, TopicAction, TopicStatus
+from domain.enums import ScopeLabel, TopicAction
 
 
 @dataclass(slots=True)
