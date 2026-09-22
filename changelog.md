@@ -41,17 +41,18 @@
 
 ### 关键设计决策与理由
 1. **真正注入记忆抽取器**：`get_memory_service` 与 `get_chat_service` 只在 `conversation_memory_enabled and long_term_memory_enabled` 为真时传入 `get_memory_extractor()`。Task 6 起 `MemoryService.extractor` 默认 `None` 且 `extract_and_save` 在 `None` 时静默返回——漏注入会让长期记忆"无报错地永久关闭"，这是 Task 6 审查点名的风险窗口，本次已闭合。
-2. **会话创建改为两步端口调用**：`ConversationRepositoryPort.create(user_id, title)` 没有 `create_topic` 参数（该参数属于 `ConversationService`），故 `ChatService` 内先 `conversations.create(...)`，再在 `memory_enabled` 时 `topics.create(conv_uuid)`——与旧 `create_conversation(create_topic=self.memory_enabled)` 语义等价（旧代码随后 `get_active` 拿到的正是该默认主题）。
+2. **会话创建改为两步端口调用**：`ConversationRepositoryPort.create(user_id, title)` 没有 `create_topic` 参数（该参数属于 `ConversationService`），故 `ChatService` 内先 `conversations.create(...)`，再在 `memory_enabled` 时 `topics.create(conv_uuid)`——与旧 `create_conversation(create_topic=self.memory_enabled)` 语义等价（旧代码随后 `get_active` 拿到的正是该默认主题）。**修复回合补充**：该端口返回的是 `Conversation` 领域对象而非 UUID，故必须先赋值局部变量再取 `.id`（`conv_uuid = conversation.id`），`process_message` 与 `_handle_clarify` 两条首轮路径同构修改；否则 `chat_id` 会变成 dataclass repr 且把对象传给 `topics.create`/`add_turn`。
 3. **`api/chat.py` 不导入 `ChatService`**：为满足"不再导入 `ChatService`"的边界要求，`chat` 路由的参数写作 `service=Depends(get_chat_service)`（无类型注解）；其余路由仍以 `ConversationService`/`TopicService`/`MemoryService` 注解。
 4. **删除 `ChatResponse` 兼容分支**：测试已全部改用 `ChatResult`，按简报"所有测试更新后删除兼容分支"删除 `hasattr(result, "answer")` 与三元组/五元组兼容路径，响应字段与文案不变。
 5. **`refusal_text` / 摘要日志文案保持原样**：`[SummaryService] 摘要更新失败…` 沿用旧字符串，避免机械替换之外的额外改动。
 
 ### 遗留事项 / 待办
 - 旧 shim `services/guard_service.py`、`services/summary_service.py`、`services/topic_router.py` 已无生产调用方（仅可能被后续任务保留），待 Task 9 删除。
-- `conversation_memory_enabled` 门控建主题属行为差异：旧 `api/chat.py` 调 `create_conversation` 时未传 `create_topic`（默认 `True`，恒建默认主题）；现按简报写为 `create_topic=db_conf.get("conversation_memory_enabled", True)`。配置为 `False` 时，`POST /api/conversations` 之后 `GET /api/chat/{id}/topics` 由"一个默认主题"变为"空列表"。
-- `/api/chat/` 的 `chat` 路由参数缺少 `ChatService` 类型注解（见决策 3）。
+- `POST /api/conversations` 的默认主题创建：审查裁决以全局约束为准，`api/chat.py` 写为 `create_topic=True`（历史行为恒建默认主题，与 `conversation_memory_enabled` 无关）；简报 Step 5 的 `db_conf.get("conversation_memory_enabled", True)` 写法视为笔误，已在修复回合改回。
+- `/api/chat/` 的 `chat` 路由参数缺少 `ChatService` 类型注解（见决策 3，审查记为 Minor，本回合未改）。
 
 ### 验证方式与结果
+首轮（提交 `b8a45e1`）：
 - TDD RED：`uv run --cache-dir .uv-cache pytest tests/test_api_dependencies.py -q`，`ModuleNotFoundError: No module named 'api.dependencies'`，`1 error in 0.10s`。
 - 聚焦 GREEN：`uv run --cache-dir .uv-cache pytest tests/test_api_dependencies.py tests/test_chat_api.py tests/test_topic_api.py tests/test_chat_service_memory.py -q`，`21 passed, 1 warning in 0.97s`。
 - 全量回归：`uv run --cache-dir .uv-cache pytest tests -q`，`61 passed, 1 warning in 0.99s`（警告仍是既有 `langgraph` 待弃用提示）。
@@ -59,6 +60,13 @@
 - 导入自证：`grep -n "db.session\|db.conversation_repo\|ChatService\|ConversationRepository\|sqlalchemy" api/chat.py` 无任何匹配。
 - 路由冒烟：`uv run --cache-dir .uv-cache python -c "from main import app; print(sorted({r.path for r in app.routes}))"`，改写前后路由集合逐项一致（18 条，含 `/api/chat/`、`/api/conversations`、`/api/memory` 等）。
 - 编译检查：7 个改动 Python 文件 `uv run --cache-dir .uv-cache python -m py_compile` 全部通过。
+
+修复回合（审查 REQUEST_CHANGES 后，提交 `fix(services): 修正首轮会话 chat_id 契约与默认主题创建`）：
+- 测试守信 RED（先写断言、修复前实测失败）：`FakeTopics.create` 内 `assert isinstance(conversation_id, UUID)`，`uv run --cache-dir .uv-cache pytest tests/test_chat_service_memory.py -q` → `7 failed, 5 passed`，报错原文 `AssertionError: conversation_id 应为 UUID，实收 <class 'domain.entities.Conversation'>`（`services\chat_service.py:226: active_topic = await self.topics.create(conv_uuid)`）。
+- `create_topic` 契约 RED（临时回退 `api/chat.py` 至 `db_conf.get("conversation_memory_enabled", True)` 实测）：`pytest tests/test_chat_api.py::test_create_conversation_always_creates_default_topic -q` → `assert False is True`（`tests\test_chat_api.py:139`）。
+- 聚焦 GREEN（修复后，22 passed = 原 21 + 新增 `test_create_conversation_always_creates_default_topic`）：`uv run --cache-dir .uv-cache pytest tests/test_api_dependencies.py tests/test_chat_api.py tests/test_topic_api.py tests/test_chat_service_memory.py -q`，`22 passed, 1 warning in 0.95s`。
+- 全量回归（修复后）：`uv run --cache-dir .uv-cache pytest tests -q`，`62 passed, 1 warning in 1.02s`。计数增量 +1 来源为本回合新增的 `create_topic` 契约回归测试；警告仍是既有 `langgraph` 待弃用提示。
+- 边界/路由复查：`services/chat_service.py` 导入根与上表一致且 `boundary self-check passed`；`grep` `api/chat.py` 仍无 `db.session`/`db.conversation_repo`/`ChatService` 匹配；路由集合仍为同样 18 条；4 个改动 Python 文件 `py_compile` 通过。
 
 ---
 

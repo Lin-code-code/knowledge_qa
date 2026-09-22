@@ -218,10 +218,11 @@ class ChatService:
             )
 
         if conv_uuid is None:
-            conv_uuid = await self.conversations.create(
+            conversation = await self.conversations.create(
                 user_id=user_id,
                 title=message[:15] + ("..." if len(message) > 15 else ""),
             )
+            conv_uuid = conversation.id
             if self.memory_enabled:
                 active_topic = await self.topics.create(conv_uuid)
 
@@ -338,10 +339,11 @@ class ChatService:
     ) -> ChatResult:
         answer = decision.clarification_question.strip() or _DEFAULT_CLARIFICATION
         if conv_uuid is None:
-            conv_uuid = await self.conversations.create(
+            conversation = await self.conversations.create(
                 user_id=user_id,
                 title=message[:15] + ("..." if len(message) > 15 else ""),
             )
+            conv_uuid = conversation.id
             if self.memory_enabled:
                 active_topic = await self.topics.create(conv_uuid)
         if self.memory_enabled and active_topic is None:

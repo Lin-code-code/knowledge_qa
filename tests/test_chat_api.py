@@ -8,7 +8,8 @@ from fastapi.testclient import TestClient
 
 import core.security as security_module
 from api.dependencies import get_chat_service, get_conversation_service
-from domain.entities import Message
+from core.config import db_conf
+from domain.entities import Conversation, Message
 from domain.enums import Role
 from main import app
 from services.chat_service import ChatResult
@@ -105,6 +106,37 @@ def test_out_of_scope_response_is_compatible():
     assert resp.status_code == 200
     assert resp.json()["topicAction"] == "OUT_OF_SCOPE"
     assert resp.json()["answer"] == "统一拒答"
+
+
+def test_create_conversation_always_creates_default_topic(monkeypatch):
+    """POST /api/conversations 恒建默认主题：与 conversation_memory_enabled 无关。"""
+    db_conf.get("conversation_memory_enabled")  # 触发懒加载，避免注入值被 YAML 覆盖
+    monkeypatch.setitem(db_conf, "conversation_memory_enabled", False)
+
+    class FakeConversationService:
+        def __init__(self):
+            self.create_calls = []
+
+        async def create(self, user_id, title, *, create_topic=True):
+            self.create_calls.append(
+                {"user_id": user_id, "title": title, "create_topic": create_topic}
+            )
+            now = datetime.now(timezone.utc)
+            return Conversation(
+                id=uuid4(),
+                user_id=user_id,
+                title=title,
+                created_at=now,
+                updated_at=now,
+            )
+
+    service = FakeConversationService()
+    app.dependency_overrides[get_conversation_service] = lambda: service
+
+    resp = client.post("/api/conversations", json={"user_id": "u1", "title": "新对话"})
+
+    assert resp.status_code == 200
+    assert service.create_calls[0]["create_topic"] is True
 
 
 def test_messages_endpoint_keeps_legacy_format():

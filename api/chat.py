@@ -5,7 +5,6 @@ from api.dependencies import (
     get_memory_service,
     get_topic_service,
 )
-from core.config import db_conf
 from core.security import require_api_key
 from domain.entities import ConversationTopic, MemoryItem
 from domain.errors import ConversationNotFoundError, TopicNotFoundError
@@ -78,7 +77,8 @@ async def create_conversation(
     conversation = await service.create(
         request.user_id or "anonymous",
         request.title or "新对话",
-        create_topic=db_conf.get("conversation_memory_enabled", True),
+        # 历史行为：POST /api/conversations 恒建一个默认主题，与记忆开关无关。
+        create_topic=True,
     )
     return ConversationCreateResponse(
         conversation_id=str(conversation.id),

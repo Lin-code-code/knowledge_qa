@@ -2,7 +2,7 @@
 import asyncio
 from datetime import datetime, timezone
 from functools import wraps
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from domain.decisions import ChatAnswer, TopicDecision, TopicSegment
 from domain.entities import Conversation, ConversationTopic, MemoryItem, Message
@@ -72,6 +72,9 @@ class FakeTopics:
         return self.active
 
     async def create(self, conversation_id, topic_label="服装咨询", **kwargs):
+        # 端口契约要求 conversation_id 为 UUID；替身在此显式锁定类型，
+        # 避免调用方误把整个 Conversation 领域对象传进来还能"通过"。
+        assert isinstance(conversation_id, UUID), f"conversation_id 应为 UUID，实收 {type(conversation_id)}"
         topic = make_topic(
             topic_label,
             conversation_id=conversation_id,
@@ -102,6 +105,7 @@ class FakeStore:
         self.added_turns = []
         self.created_conversations = 0
         self.conversation_exists = conversation_exists
+        self.last_created = None
 
     async def get(self, conversation_id):
         if not self.conversation_exists:
@@ -119,8 +123,17 @@ class FakeStore:
         return []
 
     async def create(self, user_id="anonymous", title="新对话"):
+        # 端口契约 `create(...) -> Conversation`：必须返回领域对象而不是裸 UUID。
+        now = datetime.now(timezone.utc)
         self.created_conversations += 1
-        return uuid4()
+        self.last_created = Conversation(
+            id=uuid4(),
+            user_id=user_id,
+            title=title,
+            created_at=now,
+            updated_at=now,
+        )
+        return self.last_created
 
     async def add_turn(self, conversation_id, topic_id, user_content, assistant_content, **kwargs):
         human = Message(
@@ -225,6 +238,8 @@ async def test_clarify_does_not_call_agent(monkeypatch):
     assert agent.calls == []
     assert store.created_conversations == 1
     assert store.added_turns[0]["memory_eligible"] is False
+    assert isinstance(store.last_created, Conversation)
+    assert result.chat_id == str(store.last_created.id)
 
 
 @run_async
@@ -322,6 +337,8 @@ async def test_first_message_creates_conversation_and_topic(monkeypatch):
 
     assert store.created_conversations == 1
     assert len(store.topics.created) == 1
+    assert isinstance(store.last_created, Conversation)
+    assert result.chat_id == str(store.last_created.id)
     assert result.chat_id == str(store.topics.created[0].conversation_id)
     assert result.topic_id == str(store.topics.created[0].id)
 
