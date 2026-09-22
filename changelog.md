@@ -15,6 +15,53 @@
 
 ---
 
+## [2026-09-22] 后端分层重构 Task 7：ChatService、API 组合根与聊天路由迁移
+
+### 改动标题
+`ChatService` 改为纯构造注入（会话/主题仓储端口 + 记忆、上下文、路由、护栏、Chat Agent、摘要端口），不再导入 `db`/`schemas`/`rag` 与具体 Repository；新建 `api/dependencies.py` 作为 FastAPI 组合根；`api/chat.py` 全部路由改为依赖注入的应用服务。
+
+### 改动文件清单
+新建：
+- `api/dependencies.py` — `_repositories()` + `get_conversation_service` / `get_topic_service` / `get_memory_service` / `get_chat_service`
+- `tests/test_api_dependencies.py` — 依赖可调用性与路由注册失败测试（简报内容，逐字）
+
+重写：
+- `services/chat_service.py` — 新构造函数（keyword-only）；`self.store.*` → `self.conversations.*`/`self.topics.*`；`self.store.get_recent_topic_records` → `self.conversations.get_recent_topic_messages`；`switch_topic` → `switch`；`decision.action == "X"` → `TopicAction.X`；`scope == "OUT"` → `ScopeLabel.OUT`；`get_guard_service()` → `self.guard`；`get_summary_service()` → `self.summary_agent`；`_execute_agent` 改为 `self.chat_agent.execute(query, context, topic_label)` 取 `ChatAnswer.answer/.sources`；删除 `_get_react_agent`、`_sources_ctx` 及 sources/topic contextvar 的全部导入与使用
+- `api/chat.py` — 删除 `sqlalchemy`/`db.session`/`db.conversation_repo`/`ChatService` 导入与 `ConversationRepository` 直接构造，改为 `Depends(get_*_service)`；领域异常映射为既有中文 400/404 文案
+
+修改：
+- `tests/test_chat_api.py` — 改用 `app.dependency_overrides` 注入 fake `ChatService`/`ConversationService`，不再 patch `api.chat.ConversationRepository`
+- `tests/test_topic_api.py` — 改用 `app.dependency_overrides[get_topic_service]` 注入 fake `TopicService`，主题对象改领域 dataclass
+- `tests/test_chat_service_memory.py` — `make_service(store)` 改按新构造函数组装 fake `ConversationRepositoryPort`/`TopicRepositoryPort`/`MemoryService`/`ContextBuilder`/`TopicClassifierPort`/`GuardPort`/`ChatAgentPort`/`SummaryGeneratorPort`；ORM `SimpleNamespace` 全部换成领域 dataclass；12 个场景与断言全部保留
+- `changelog.md` — 追加本次进度记录
+
+未修改 `services/guard_service.py`、`services/summary_service.py`、`services/topic_router.py` 三个 shim（Task 9 删除），也未改 `services/context_builder.py`、`domain/`、`db/`、`models/`、`agent/`。
+
+无需更新 `README.md`：`/api/*` 请求/响应字段、状态码、中文错误文案、数据库表结构、配置键与依赖均未变化。
+
+### 关键设计决策与理由
+1. **真正注入记忆抽取器**：`get_memory_service` 与 `get_chat_service` 只在 `conversation_memory_enabled and long_term_memory_enabled` 为真时传入 `get_memory_extractor()`。Task 6 起 `MemoryService.extractor` 默认 `None` 且 `extract_and_save` 在 `None` 时静默返回——漏注入会让长期记忆"无报错地永久关闭"，这是 Task 6 审查点名的风险窗口，本次已闭合。
+2. **会话创建改为两步端口调用**：`ConversationRepositoryPort.create(user_id, title)` 没有 `create_topic` 参数（该参数属于 `ConversationService`），故 `ChatService` 内先 `conversations.create(...)`，再在 `memory_enabled` 时 `topics.create(conv_uuid)`——与旧 `create_conversation(create_topic=self.memory_enabled)` 语义等价（旧代码随后 `get_active` 拿到的正是该默认主题）。
+3. **`api/chat.py` 不导入 `ChatService`**：为满足"不再导入 `ChatService`"的边界要求，`chat` 路由的参数写作 `service=Depends(get_chat_service)`（无类型注解）；其余路由仍以 `ConversationService`/`TopicService`/`MemoryService` 注解。
+4. **删除 `ChatResponse` 兼容分支**：测试已全部改用 `ChatResult`，按简报"所有测试更新后删除兼容分支"删除 `hasattr(result, "answer")` 与三元组/五元组兼容路径，响应字段与文案不变。
+5. **`refusal_text` / 摘要日志文案保持原样**：`[SummaryService] 摘要更新失败…` 沿用旧字符串，避免机械替换之外的额外改动。
+
+### 遗留事项 / 待办
+- 旧 shim `services/guard_service.py`、`services/summary_service.py`、`services/topic_router.py` 已无生产调用方（仅可能被后续任务保留），待 Task 9 删除。
+- `conversation_memory_enabled` 门控建主题属行为差异：旧 `api/chat.py` 调 `create_conversation` 时未传 `create_topic`（默认 `True`，恒建默认主题）；现按简报写为 `create_topic=db_conf.get("conversation_memory_enabled", True)`。配置为 `False` 时，`POST /api/conversations` 之后 `GET /api/chat/{id}/topics` 由"一个默认主题"变为"空列表"。
+- `/api/chat/` 的 `chat` 路由参数缺少 `ChatService` 类型注解（见决策 3）。
+
+### 验证方式与结果
+- TDD RED：`uv run --cache-dir .uv-cache pytest tests/test_api_dependencies.py -q`，`ModuleNotFoundError: No module named 'api.dependencies'`，`1 error in 0.10s`。
+- 聚焦 GREEN：`uv run --cache-dir .uv-cache pytest tests/test_api_dependencies.py tests/test_chat_api.py tests/test_topic_api.py tests/test_chat_service_memory.py -q`，`21 passed, 1 warning in 0.97s`。
+- 全量回归：`uv run --cache-dir .uv-cache pytest tests -q`，`61 passed, 1 warning in 0.99s`（警告仍是既有 `langgraph` 待弃用提示）。
+- 边界自证：AST 扫描 `services/chat_service.py`，导入根为 `['asyncio','core','dataclasses','domain','services','uuid']`，与 `{db, schemas, rag, api, fastapi, sqlalchemy, agent}` 无交集，输出 `boundary self-check passed`。
+- 导入自证：`grep -n "db.session\|db.conversation_repo\|ChatService\|ConversationRepository\|sqlalchemy" api/chat.py` 无任何匹配。
+- 路由冒烟：`uv run --cache-dir .uv-cache python -c "from main import app; print(sorted({r.path for r in app.routes}))"`，改写前后路由集合逐项一致（18 条，含 `/api/chat/`、`/api/conversations`、`/api/memory` 等）。
+- 编译检查：7 个改动 Python 文件 `uv run --cache-dir .uv-cache python -m py_compile` 全部通过。
+
+---
+
 ## [2026-09-22] 后端分层重构 Task 6：会话、主题、记忆应用服务与 ContextBuilder
 
 ### 改动标题

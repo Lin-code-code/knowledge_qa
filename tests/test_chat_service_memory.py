@@ -1,11 +1,12 @@
 """企业级会话记忆主流程测试。"""
 import asyncio
+from datetime import datetime, timezone
 from functools import wraps
-from types import SimpleNamespace
 from uuid import uuid4
 
-import services.chat_service as chat_module
-from domain.decisions import TopicDecision, TopicSegment
+from domain.decisions import ChatAnswer, TopicDecision, TopicSegment
+from domain.entities import Conversation, ConversationTopic, MemoryItem, Message
+from domain.enums import Role, ScopeLabel, TopicStatus
 from services.chat_service import ChatService
 from services.context_builder import ContextBuilder
 
@@ -16,6 +17,47 @@ def run_async(func):
         return asyncio.run(func(*args, **kwargs))
 
     return wrapper
+
+
+def make_topic(
+    label="服装咨询",
+    *,
+    conversation_id=None,
+    summary="",
+    last_intent="general",
+    status=TopicStatus.ACTIVE,
+):
+    now = datetime.now(timezone.utc)
+    return ConversationTopic(
+        id=uuid4(),
+        conversation_id=conversation_id or uuid4(),
+        topic_label=label,
+        last_intent=last_intent,
+        scope_label=ScopeLabel.IN,
+        confidence=0.0,
+        status=status,
+        summary=summary,
+        summary_version=0,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def make_memory(memory_key, content):
+    now = datetime.now(timezone.utc)
+    return MemoryItem(
+        id=uuid4(),
+        user_id="user",
+        memory_type="preference",
+        memory_key=memory_key,
+        content=content,
+        source_message_id=None,
+        confidence=1.0,
+        expires_at=None,
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
 
 
 class FakeTopics:
@@ -30,20 +72,16 @@ class FakeTopics:
         return self.active
 
     async def create(self, conversation_id, topic_label="服装咨询", **kwargs):
-        topic = SimpleNamespace(
-            id=uuid4(),
+        topic = make_topic(
+            topic_label,
             conversation_id=conversation_id,
-            topic_label=topic_label,
-            summary="",
-            summary_version=0,
             last_intent=kwargs.get("intent"),
-            status="active",
         )
         self.created.append(topic)
         self.active = topic
         return topic
 
-    async def switch_topic(self, conversation_id, topic_label, **kwargs):
+    async def switch(self, conversation_id, topic_label, **kwargs):
         topic = await self.create(conversation_id, topic_label, **kwargs)
         self.switched.append(topic)
         return topic
@@ -57,33 +95,41 @@ class FakeTopics:
 
 
 class FakeStore:
+    """假的会话仓储（ConversationRepositoryPort）。"""
+
     def __init__(self, active=None, conversation_exists=True):
         self.topics = FakeTopics(active)
-        self.memories = SimpleNamespace()
         self.added_turns = []
         self.created_conversations = 0
         self.conversation_exists = conversation_exists
 
-    async def get_conversation(self, _conversation_id):
-        return SimpleNamespace(id=uuid4()) if self.conversation_exists else None
+    async def get(self, conversation_id):
+        if not self.conversation_exists:
+            return None
+        now = datetime.now(timezone.utc)
+        return Conversation(
+            id=conversation_id,
+            user_id="anonymous",
+            title="新对话",
+            created_at=now,
+            updated_at=now,
+        )
 
-    async def get_recent_topic_records(self, _topic_id):
+    async def get_recent_topic_messages(self, _topic_id):
         return []
 
-    async def create_conversation(
-        self,
-        user_id="anonymous",
-        title="新对话",
-        create_topic=True,
-    ):
+    async def create(self, user_id="anonymous", title="新对话"):
         self.created_conversations += 1
-        conversation_id = uuid4()
-        if create_topic:
-            await self.topics.create(conversation_id)
-        return conversation_id
+        return uuid4()
 
     async def add_turn(self, conversation_id, topic_id, user_content, assistant_content, **kwargs):
-        human = SimpleNamespace(id=1, content=user_content)
+        human = Message(
+            conversation_id=conversation_id,
+            role=Role.HUMAN,
+            content=user_content,
+            id=1,
+            topic_id=topic_id,
+        )
         self.added_turns.append(
             {
                 "conversation_id": conversation_id,
@@ -93,7 +139,13 @@ class FakeStore:
                 **kwargs,
             }
         )
-        return human, SimpleNamespace(id=2, content=assistant_content)
+        return human, Message(
+            conversation_id=conversation_id,
+            role=Role.AI,
+            content=assistant_content,
+            id=2,
+            topic_id=topic_id,
+        )
 
 
 class FakeMemoryService:
@@ -130,21 +182,25 @@ class FakeAgent:
     def __init__(self):
         self.calls = []
 
-    async def aexecute(self, query, context):
+    async def execute(self, query, context, topic_label):
         self.calls.append((query, context))
-        return "服装回答"
+        return ChatAnswer(answer="服装回答")
 
 
 def make_service(store):
-    service = ChatService.__new__(ChatService)
-    service.store = store
-    service.context_builder = ContextBuilder()
+    service = ChatService(
+        conversations=store,
+        topics=store.topics,
+        memory_service=None,
+        context_builder=ContextBuilder(),
+        topic_router=object(),
+        guard=FakeGuard(),
+        chat_agent=FakeAgent(),
+        summary_agent=None,
+    )
     service.memory_enabled = True
     service.router_enabled = True
-    service.long_term_memory_enabled = False
     service.summary_enabled = False
-    service.topic_router = object()
-    service.memory_service = None
     return service
 
 
@@ -160,7 +216,7 @@ async def test_clarify_does_not_call_agent(monkeypatch):
             clarification_question="请问您指的是哪件T恤？",
         )
     ))
-    monkeypatch.setattr(chat_module, "_get_react_agent", lambda: agent)
+    service.chat_agent = agent
 
     result = await service.process_message("它怎么洗？", None)
 
@@ -178,7 +234,6 @@ async def test_out_of_scope_does_not_create_new_conversation(monkeypatch):
     monkeypatch.setattr(service, "_route", lambda *args, **kwargs: _async_result(
         TopicDecision(action="OUT_OF_SCOPE", scope="OUT", canonical_query="股票行情")
     ))
-    monkeypatch.setattr(chat_module, "get_guard_service", lambda: FakeGuard())
 
     result = await service.process_message("今天股票涨了吗", None)
 
@@ -190,11 +245,9 @@ async def test_out_of_scope_does_not_create_new_conversation(monkeypatch):
 
 @run_async
 async def test_new_topic_does_not_send_old_topic_messages(monkeypatch):
-    old_topic = SimpleNamespace(
-        id=uuid4(),
-        topic_label="旧主题",
+    old_topic = make_topic(
+        "旧主题",
         summary="旧主题摘要",
-        summary_version=0,
         last_intent="washing_care",
     )
     store = FakeStore(active=old_topic)
@@ -208,8 +261,7 @@ async def test_new_topic_does_not_send_old_topic_messages(monkeypatch):
             canonical_query="羽绒服怎么洗",
         )
     ))
-    monkeypatch.setattr(chat_module, "_get_react_agent", lambda: agent)
-    monkeypatch.setattr(chat_module, "get_guard_service", lambda: FakeGuard())
+    service.chat_agent = agent
 
     chat_id = uuid4()
     result = await service.process_message("羽绒服怎么洗", chat_id)
@@ -223,11 +275,9 @@ async def test_new_topic_does_not_send_old_topic_messages(monkeypatch):
 
 @run_async
 async def test_continue_reuses_active_topic(monkeypatch):
-    active = SimpleNamespace(
-        id=uuid4(),
-        topic_label="纯棉T恤洗护",
+    active = make_topic(
+        "纯棉T恤洗护",
         summary="纯棉T恤洗护摘要",
-        summary_version=0,
         last_intent="washing_care",
     )
     store = FakeStore(active=active)
@@ -241,8 +291,7 @@ async def test_continue_reuses_active_topic(monkeypatch):
             canonical_query="那它怎么洗",
         )
     ))
-    monkeypatch.setattr(chat_module, "_get_react_agent", lambda: agent)
-    monkeypatch.setattr(chat_module, "get_guard_service", lambda: FakeGuard())
+    service.chat_agent = agent
 
     chat_id = uuid4()
     result = await service.process_message("那它怎么洗", chat_id)
@@ -267,8 +316,7 @@ async def test_first_message_creates_conversation_and_topic(monkeypatch):
             canonical_query="纯棉T恤会缩水吗",
         )
     ))
-    monkeypatch.setattr(chat_module, "_get_react_agent", lambda: agent)
-    monkeypatch.setattr(chat_module, "get_guard_service", lambda: FakeGuard())
+    service.chat_agent = agent
 
     result = await service.process_message("纯棉T恤会缩水吗", None)
 
@@ -292,14 +340,13 @@ async def test_summary_failure_does_not_break_answer(monkeypatch):
             canonical_query="纯棉T恤怎么洗",
         )
     ))
-    monkeypatch.setattr(chat_module, "_get_react_agent", lambda: agent)
-    monkeypatch.setattr(chat_module, "get_guard_service", lambda: FakeGuard())
+    service.chat_agent = agent
 
     class BrokenSummary:
         def summarize(self, *_args, **_kwargs):
             raise RuntimeError("摘要模型不可用")
 
-    monkeypatch.setattr(chat_module, "get_summary_service", lambda: BrokenSummary())
+    service.summary_agent = BrokenSummary()
 
     result = await service.process_message("纯棉T恤怎么洗", None)
 
@@ -322,14 +369,13 @@ async def test_summary_version_conflict_does_not_override(monkeypatch):
             canonical_query="纯棉T恤怎么洗",
         )
     ))
-    monkeypatch.setattr(chat_module, "_get_react_agent", lambda: agent)
-    monkeypatch.setattr(chat_module, "get_guard_service", lambda: FakeGuard())
+    service.chat_agent = agent
 
     class OkSummary:
         def summarize(self, *_args, **_kwargs):
             return "更新后的摘要"
 
-    monkeypatch.setattr(chat_module, "get_summary_service", lambda: OkSummary())
+    service.summary_agent = OkSummary()
 
     result = await service.process_message("纯棉T恤怎么洗", None)
 
@@ -340,11 +386,9 @@ async def test_summary_version_conflict_does_not_override(monkeypatch):
 
 @run_async
 async def test_out_of_scope_not_saved_to_summary_or_memory(monkeypatch):
-    active = SimpleNamespace(
-        id=uuid4(),
-        topic_label="T恤洗护",
+    active = make_topic(
+        "T恤洗护",
         summary="旧摘要",
-        summary_version=0,
         last_intent="washing_care",
     )
     store = FakeStore(active=active)
@@ -354,7 +398,6 @@ async def test_out_of_scope_not_saved_to_summary_or_memory(monkeypatch):
     monkeypatch.setattr(service, "_route", lambda *args, **kwargs: _async_result(
         TopicDecision(action="OUT_OF_SCOPE", scope="OUT", canonical_query="今天股票涨了吗")
     ))
-    monkeypatch.setattr(chat_module, "get_guard_service", lambda: FakeGuard())
 
     result = await service.process_message("今天股票涨了吗", uuid4())
 
@@ -377,8 +420,8 @@ async def test_agent_context_uses_filtered_preferences(monkeypatch):
 
         async def list_for_prompt(self, user_id):
             return [
-                SimpleNamespace(status="active", memory_key="size", content="常用尺码 L", expires_at=None),
-                SimpleNamespace(status="active", memory_key="color", content="偏好黑色", expires_at=None),
+                make_memory("size", "常用尺码 L"),
+                make_memory("color", "偏好黑色"),
             ]
 
         def select_for_query(self, memories, query, intent=None):
@@ -398,8 +441,7 @@ async def test_agent_context_uses_filtered_preferences(monkeypatch):
             canonical_query="推荐一件T恤",
         )
     ))
-    monkeypatch.setattr(chat_module, "_get_react_agent", lambda: agent)
-    monkeypatch.setattr(chat_module, "get_guard_service", lambda: FakeGuard())
+    service.chat_agent = agent
 
     result = await service.process_message("推荐一件T恤", None, user_id="user-1")
 
@@ -424,8 +466,7 @@ async def test_mixed_question_only_answers_in_scope_segment(monkeypatch):
             ],
         )
     ))
-    monkeypatch.setattr(chat_module, "_get_react_agent", lambda: agent)
-    monkeypatch.setattr(chat_module, "get_guard_service", lambda: FakeGuard())
+    service.chat_agent = agent
 
     result = await service.process_message("帮我查股票，再推荐一件羽绒服", None)
 
@@ -449,8 +490,7 @@ async def test_memory_disabled_keeps_messages_without_creating_topic(monkeypatch
             canonical_query="推荐一件T恤",
         )
     ))
-    monkeypatch.setattr(chat_module, "_get_react_agent", lambda: agent)
-    monkeypatch.setattr(chat_module, "get_guard_service", lambda: FakeGuard())
+    service.chat_agent = agent
 
     result = await service.process_message("推荐一件T恤", None)
 
@@ -465,16 +505,7 @@ async def test_memory_disabled_keeps_messages_without_creating_topic(monkeypatch
 async def test_new_conversation_loads_existing_user_preferences(monkeypatch):
     store = FakeStore()
     service = make_service(store)
-    memory_service = FakeMemoryService(
-        [
-            SimpleNamespace(
-                status="active",
-                memory_key="size",
-                content="常用尺码 L",
-                expires_at=None,
-            )
-        ]
-    )
+    memory_service = FakeMemoryService([make_memory("size", "常用尺码 L")])
     service.memory_service = memory_service
     agent = FakeAgent()
     monkeypatch.setattr(service, "_route", lambda *args, **kwargs: _async_result(
@@ -485,8 +516,7 @@ async def test_new_conversation_loads_existing_user_preferences(monkeypatch):
             canonical_query="推荐一件黑色T恤",
         )
     ))
-    monkeypatch.setattr(chat_module, "_get_react_agent", lambda: agent)
-    monkeypatch.setattr(chat_module, "get_guard_service", lambda: FakeGuard())
+    service.chat_agent = agent
 
     result = await service.process_message(
         "推荐一件黑色T恤",

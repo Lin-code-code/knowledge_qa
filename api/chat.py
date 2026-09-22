@@ -1,13 +1,21 @@
 from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy.ext.asyncio import AsyncSession
-from db.session import get_db
-from db.conversation_repo import ConversationRepository
-from services.chat_service import ChatService, ConversationNotFoundError
+from api.dependencies import (
+    get_chat_service,
+    get_conversation_service,
+    get_memory_service,
+    get_topic_service,
+)
+from core.config import db_conf
 from core.security import require_api_key
+from domain.entities import ConversationTopic, MemoryItem
+from domain.errors import ConversationNotFoundError, TopicNotFoundError
+from services.conversation_service import ConversationService
+from services.memory_service import MemoryService
+from services.topic_service import TopicService
 from schemas.chat import (
     ChatRequest, ChatResponse, ChatDeleteResponse,
     ConversationCreateRequest, ConversationCreateResponse,
-    ConversationListResponse, MessageListResponse
+    ConversationListItem, ConversationListResponse, MessageListResponse
 )
 from schemas.memory import MemoryDeleteResponse, MemoryListResponse, MemoryItemResponse
 from schemas.topic import (
@@ -24,34 +32,34 @@ router = APIRouter(prefix="/api", tags=["Chat"], dependencies=[Depends(require_a
 @router.get("/conversations", response_model=ConversationListResponse)
 async def list_conversations(
     user_id: str = "anonymous",
-    db: AsyncSession = Depends(get_db),
+    service: ConversationService = Depends(get_conversation_service),
 ):
-    store = ConversationRepository(db)
-    convs = await store.list_conversations(user_id=user_id)
-    items = []
-    for c in convs:
-        items.append({
-            "conversation_id": str(c.id),
-            "title": c.title,
-            "created_at": c.created_at.isoformat(),
-            "updated_at": c.updated_at.isoformat(),
-            "message_count": 0,
-        })
-    return ConversationListResponse(conversations=items)
+    conversations = await service.list(user_id)
+    return ConversationListResponse(
+        conversations=[
+            ConversationListItem(
+                conversation_id=str(item.id),
+                title=item.title,
+                created_at=item.created_at.isoformat(),
+                updated_at=item.updated_at.isoformat(),
+                message_count=0,
+            )
+            for item in conversations
+        ]
+    )
 
 
 @router.get("/chat/{conversation_id}/messages", response_model=MessageListResponse)
 async def get_chat_messages(
     conversation_id: str,
-    db: AsyncSession = Depends(get_db),
+    service: ConversationService = Depends(get_conversation_service),
 ):
     try:
         conv_uuid = uuid.UUID(conversation_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="conversation_id 格式无效")
 
-    store = ConversationRepository(db)
-    msgs = await store.get_messages(conv_uuid)
+    msgs = await service.get_messages(conv_uuid)
     return MessageListResponse(
         messages=[{
             "role": m.role,
@@ -65,15 +73,15 @@ async def get_chat_messages(
 @router.post("/conversations", response_model=ConversationCreateResponse)
 async def create_conversation(
     request: ConversationCreateRequest,
-    db: AsyncSession = Depends(get_db),
+    service: ConversationService = Depends(get_conversation_service),
 ):
-    store = ConversationRepository(db)
-    conv_id = await store.create_conversation(
-        user_id=request.user_id or "anonymous",
-        title=request.title or "新对话",
+    conversation = await service.create(
+        request.user_id or "anonymous",
+        request.title or "新对话",
+        create_topic=db_conf.get("conversation_memory_enabled", True),
     )
     return ConversationCreateResponse(
-        conversation_id=str(conv_id),
+        conversation_id=str(conversation.id),
         title=request.title or "新对话",
     )
 
@@ -81,7 +89,7 @@ async def create_conversation(
 @router.post("/chat/", response_model=ChatResponse)
 async def chat(
     request: ChatRequest,
-    db: AsyncSession = Depends(get_db),
+    service=Depends(get_chat_service),
 ):
     if not request.message or not request.message.strip():
         raise HTTPException(status_code=400, detail="消息不能为空")
@@ -93,7 +101,6 @@ async def chat(
         except ValueError:
             raise HTTPException(status_code=400, detail="chatId 格式无效")
 
-    service = ChatService(db)
     try:
         result = await service.process_message(
             request.message,
@@ -102,26 +109,13 @@ async def chat(
         )
     except ConversationNotFoundError:
         raise HTTPException(status_code=404, detail="对话不存在")
-    # 兼容上一版本的三元组 mock/调用方，正式实现返回 ChatResult。
-    if hasattr(result, "answer"):
-        return ChatResponse(
-            answer=result.answer,
-            sources=result.sources,
-            chatId=result.chat_id or None,
-            topicId=result.topic_id,
-            topicAction=result.topic_action,
-        )
 
-    if len(result) == 3:
-        answer, sources, chat_id = result
-        return ChatResponse(answer=answer, sources=sources, chatId=chat_id)
-    answer, sources, chat_id, topic_id, topic_action = result
     return ChatResponse(
-        answer=answer,
-        sources=sources,
-        chatId=chat_id or None,
-        topicId=topic_id,
-        topicAction=topic_action,
+        answer=result.answer,
+        sources=result.sources,
+        chatId=result.chat_id or None,
+        topicId=result.topic_id,
+        topicAction=result.topic_action,
     )
 
 
@@ -131,17 +125,13 @@ async def chat(
 )
 async def list_topics(
     conversation_id: str,
-    db: AsyncSession = Depends(get_db),
+    service: TopicService = Depends(get_topic_service),
 ):
+    conv_uuid = _parse_uuid(conversation_id, "conversation_id")
     try:
-        conv_uuid = uuid.UUID(conversation_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="conversation_id 格式无效")
-
-    store = ConversationRepository(db)
-    if await store.get_conversation(conv_uuid) is None:
+        topics = await service.list(conv_uuid)
+    except ConversationNotFoundError:
         raise HTTPException(status_code=404, detail="对话不存在")
-    topics = await store.topics.list(conv_uuid)
     return TopicListResponse(
         conversation_id=conversation_id,
         topics=[_topic_item(topic) for topic in topics],
@@ -155,13 +145,13 @@ async def list_topics(
 async def get_topic(
     conversation_id: str,
     topic_id: str,
-    db: AsyncSession = Depends(get_db),
+    service: TopicService = Depends(get_topic_service),
 ):
     conv_uuid = _parse_uuid(conversation_id, "conversation_id")
     topic_uuid = _parse_uuid(topic_id, "topic_id")
-    store = ConversationRepository(db)
-    topic = await store.topics.get(conv_uuid, topic_uuid)
-    if topic is None:
+    try:
+        topic = await service.get(conv_uuid, topic_uuid)
+    except TopicNotFoundError:
         raise HTTPException(status_code=404, detail="主题不存在")
     return TopicDetailResponse(
         **_topic_item(topic).model_dump(),
@@ -176,15 +166,14 @@ async def get_topic(
 async def archive_topic(
     conversation_id: str,
     topic_id: str,
-    db: AsyncSession = Depends(get_db),
+    service: TopicService = Depends(get_topic_service),
 ):
     conv_uuid = _parse_uuid(conversation_id, "conversation_id")
     topic_uuid = _parse_uuid(topic_id, "topic_id")
-    store = ConversationRepository(db)
-    topic = await store.topics.get(conv_uuid, topic_uuid)
-    if topic is None:
+    try:
+        await service.archive(conv_uuid, topic_uuid)
+    except TopicNotFoundError:
         raise HTTPException(status_code=404, detail="主题不存在")
-    await store.topics.archive(topic_uuid)
     return TopicArchiveResponse(
         topic_id=topic_id,
         status="archived",
@@ -195,11 +184,10 @@ async def archive_topic(
 @router.get("/memory", response_model=MemoryListResponse)
 async def list_memory(
     user_id: str = "anonymous",
-    db: AsyncSession = Depends(get_db),
+    service: MemoryService = Depends(get_memory_service),
 ):
     user_id = (user_id or "anonymous").strip()[:64] or "anonymous"
-    store = ConversationRepository(db)
-    memories = await store.memories.list_active(user_id)
+    memories = await service.list_active(user_id)
     return MemoryListResponse(
         user_id=user_id,
         memories=[_memory_item(item) for item in memories],
@@ -210,12 +198,11 @@ async def list_memory(
 async def delete_memory(
     memory_id: str,
     user_id: str = "anonymous",
-    db: AsyncSession = Depends(get_db),
+    service: MemoryService = Depends(get_memory_service),
 ):
     memory_uuid = _parse_uuid(memory_id, "memory_id")
     user_id = (user_id or "anonymous").strip()[:64] or "anonymous"
-    store = ConversationRepository(db)
-    deleted = await store.memories.delete_one(user_id, memory_uuid)
+    deleted = await service.delete_one(user_id, memory_uuid)
     if not deleted:
         raise HTTPException(status_code=404, detail="长期记忆不存在")
     return MemoryDeleteResponse(message="长期记忆已删除", deleted_count=1)
@@ -224,11 +211,10 @@ async def delete_memory(
 @router.delete("/memory", response_model=MemoryDeleteResponse)
 async def delete_all_memory(
     user_id: str = "anonymous",
-    db: AsyncSession = Depends(get_db),
+    service: MemoryService = Depends(get_memory_service),
 ):
     user_id = (user_id or "anonymous").strip()[:64] or "anonymous"
-    store = ConversationRepository(db)
-    deleted_count = await store.memories.delete_all(user_id)
+    deleted_count = await service.delete_all(user_id)
     return MemoryDeleteResponse(
         message="长期记忆已清除",
         deleted_count=deleted_count,
@@ -238,15 +224,14 @@ async def delete_all_memory(
 @router.delete("/chat/{chat_id}", response_model=ChatDeleteResponse)
 async def delete_chat(
     chat_id: str,
-    db: AsyncSession = Depends(get_db),
+    service: ConversationService = Depends(get_conversation_service),
 ):
     try:
         conv_uuid = uuid.UUID(chat_id)
     except ValueError:
         raise HTTPException(status_code=400, detail="conversation_id 格式无效")
 
-    store = ConversationRepository(db)
-    deleted = await store.delete_conversation(conv_uuid)
+    deleted = await service.delete(conv_uuid)
 
     if not deleted:
         raise HTTPException(status_code=404, detail="对话不存在")
@@ -264,7 +249,7 @@ def _parse_uuid(value: str, field_name: str) -> uuid.UUID:
         raise HTTPException(status_code=400, detail=f"{field_name} 格式无效")
 
 
-def _topic_item(topic) -> TopicListItem:
+def _topic_item(topic: ConversationTopic) -> TopicListItem:
     return TopicListItem(
         topic_id=str(topic.id),
         topic_label=topic.topic_label,
@@ -277,7 +262,7 @@ def _topic_item(topic) -> TopicListItem:
     )
 
 
-def _memory_item(item) -> MemoryItemResponse:
+def _memory_item(item: MemoryItem) -> MemoryItemResponse:
     return MemoryItemResponse(
         id=str(item.id),
         memory_type=item.memory_type,
