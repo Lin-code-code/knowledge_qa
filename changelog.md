@@ -15,6 +15,43 @@
 
 ---
 
+## [2026-09-22] 后端分层重构 Task 3：迁移 ORM 并建立领域映射器
+
+### 改动标题
+把 `models/` 迁移到 `db/models/`，新增 `db/mappers.py` 承担 ORM 行对象到领域实体的转换，并保留 `models/` 兼容转发包，保证 Task 7 之前旧导入路径不断裂。
+
+### 改动文件清单
+移动：
+- `models/__init__.py`、`base.py`、`conversation.py`、`memory_item.py`、`uploaded_file.py` → `db/models/`（`git mv`，保留历史）
+
+新建：
+- `db/mappers.py` — `to_conversation`、`to_message`、`to_topic`、`to_memory_item`、`to_uploaded_file`、`to_file_summary`、`to_scope_label`
+- `models/__init__.py`、`models/base.py`、`models/conversation.py`、`models/memory_item.py`、`models/uploaded_file.py` — 临时兼容转发包（Task 9 删除）
+- `tests/test_mappers.py` — 会话字段保真、消息/主题枚举转换测试
+
+修改：
+- `db/models/__init__.py` — 改为按 `db.models.*` 绝对导入并导出 ORM 类
+- `db/models/conversation.py`、`memory_item.py`、`uploaded_file.py` — `from models.base import Base` 改为 `from db.models.base import Base`
+- `changelog.md` — 追加本次进度记录
+
+无需更新 `README.md`：外层导入路径与旧数据表、接口、配置均未变化，`services/`、`db/*_repo.py` 仍通过兼容包按原样导入。
+
+### 关键设计决策与理由
+1. `db/mappers.py` 是唯一把 ORM 行对象翻成领域实体的地方，后续 Repository 只调用 mapper，不再各自拼装领域对象。
+2. `to_scope_label` 对 `None` 返回 `None`、其余非 `OUT` 一律归一为 `IN`，兼容旧数据里 `scope_label` 为空或异常值的行。
+3. 兼容包只做同名转发（`models.conversation.Conversation is db.models.conversation.Conversation`），不是复制类，避免出现两套 ORM 元数据；Task 9 统一删除。
+
+### 遗留事项 / 待办
+- `services/*`、`db/*_repo.py`、部分测试仍在导入 `models.*`，由 Task 4-7 逐步切到 `db.models` / 领域实体，Task 9 删除兼容层。
+
+### 验证方式与结果
+- TDD RED：`uv run --cache-dir .uv-cache pytest tests/test_mappers.py -q`，确认 `ModuleNotFoundError: No module named 'db.mappers'`。
+- TDD GREEN：`uv run --cache-dir .uv-cache pytest tests/test_mappers.py -q`，`2 passed in 0.29s`。
+- 兼容性冒烟：`models.conversation.Conversation is db.models.conversation.Conversation` 为 `True`；`db.mappers` 七个 `to_*` 函数齐全。
+- 全量回归：`uv run --cache-dir .uv-cache pytest tests -q`，`50 passed, 1 warning in 1.03s`；警告来自既有 `langgraph` 依赖的待弃用提示。
+
+---
+
 ## [2026-09-22] 后端分层重构 Task 2：定义仓储与 AI/RAG 应用端口
 
 ### 改动标题

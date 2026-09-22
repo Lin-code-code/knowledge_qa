@@ -1,4 +1,3 @@
-from models.conversation import Conversation, ConversationTopic, Message
-from models.memory_item import MemoryItem
+from db.models import Base, Conversation, ConversationTopic, MemoryItem, Message, UploadedFile
 
-__all__ = ["Conversation", "ConversationTopic", "Message", "MemoryItem"]
+__all__ = ["Base", "Conversation", "ConversationTopic", "MemoryItem", "Message", "UploadedFile"]
