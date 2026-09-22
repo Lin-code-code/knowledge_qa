@@ -15,6 +15,37 @@
 
 ---
 
+## [2026-09-22] 后端分层重构 Task 2：定义仓储与 AI/RAG 应用端口
+
+### 改动标题
+新增零框架依赖的 `domain.ports` 协议层，为后续数据库适配器、Agent/RAG 适配器和应用服务提供稳定契约。
+
+### 改动文件清单
+新建：
+- `domain/ports.py` — 会话、主题、记忆、文件仓储端口，以及聊天、主题分类、Guard、摘要、记忆提取、文档索引和异步文档读取端口
+- `tests/test_domain_ports.py` — 校验聊天 Agent 参数和会话写入参数的契约测试
+
+修改：
+- `changelog.md` — 追加本次进度记录
+
+无需更新 `README.md`：本次仅建立内部 Protocol 契约，没有改变外部 HTTP、数据库、配置或依赖行为。
+
+### 关键设计决策与理由
+1. 所有端口仅依赖标准库和 `domain` 内实体/决策/枚举，延续领域层零框架依赖边界。
+2. 仓储与聊天执行端口声明为异步接口，同步的领域决策、分类、Guard、摘要、记忆提取和文档索引能力保持同步签名。
+3. 端口签名严格对齐现有调用需求，不提前扩展 Task 2 以外的能力。
+
+### 遗留事项 / 待办
+- 后续任务基于这些端口实现基础设施适配器和应用服务编排。
+
+### 验证方式与结果
+- TDD RED：`uv run --cache-dir .uv-cache pytest tests/test_domain_ports.py -q`，确认 `ModuleNotFoundError: No module named 'domain.ports'`。
+- TDD GREEN：`uv run --cache-dir .uv-cache pytest tests/test_domain_layer.py tests/test_domain_ports.py -q`，`5 passed in 0.03s`。
+- 编译检查：`uv run --cache-dir .uv-cache python -m py_compile domain/ports.py tests/test_domain_ports.py`，退出码 0。
+- 全量回归：`uv run --cache-dir .uv-cache pytest tests -q`，`48 passed, 1 warning in 1.22s`；警告来自既有 `langgraph` 依赖的待弃用提示。
+
+---
+
 ## [2026-09-22] 后端分层重构 Task 1：建立纯领域实体、枚举、错误与决策对象
 
 ### 改动标题
