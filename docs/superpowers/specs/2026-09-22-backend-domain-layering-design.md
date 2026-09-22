@@ -1,7 +1,7 @@
 # 后端 domain/service/db/api 分层重构设计
 
 - 日期：2026-09-22
-- 状态：已确认，待用户审阅
+- 状态：已确认，已审阅
 - 分支：`codex/refactor-domain-layers`
 - 目标：在不改变对外 HTTP 契约、数据库表结构和配置键的前提下，将后端重构为 `api -> services -> domain`，并由 `db` 和现有 `rag/agent` 提供适配实现。
 
@@ -140,6 +140,7 @@ api        -> db.repositories, db.models, ORM session 细节
 - `ConversationNotFoundError`
 - `TopicNotFoundError`
 - `MemoryNotFoundError`
+- `DocumentNotFoundError`
 - `DuplicateDocumentError`
 - `EmptyDocumentError`
 - `UnsupportedDocumentTypeError`
@@ -182,7 +183,7 @@ Service 不抛 `HTTPException`。API 负责将领域错误映射为现有状态�
 
 ### 6.2 AI/RAG 能力端口
 
-- `ChatAgentPort.execute(query, context) -> ChatAnswer`
+- `ChatAgentPort.execute(query, context, topic_label) -> ChatAnswer`
 - `TopicClassifierPort.route(message, topic, recent_messages, memories) -> TopicDecision`
 - `GuardPort.check_question_scope(query) -> bool`
 - `GuardPort.check(query, answer) -> tuple[bool, str]`
