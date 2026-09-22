@@ -15,6 +15,51 @@
 
 ---
 
+## [2026-09-22] 后端分层重构 Task 6：会话、主题、记忆应用服务与 ContextBuilder
+
+### 改动标题
+新建 `ConversationService`、`TopicService`；把 `MemoryService` 重写为消费 `MemoryRepositoryPort`/`MemoryExtractorPort` 的应用服务；`ContextBuilder` 改为只依赖领域实体与枚举。四个 `services` 文件不再导入 ORM、`db`、`api` 或 `agent`。
+
+### 改动文件清单
+新建：
+- `services/conversation_service.py` — `ConversationService`（创建会话时可选建默认主题）
+- `services/topic_service.py` — `TopicService`（缺主题抛 `TopicNotFoundError`，缺会话抛 `ConversationNotFoundError`）
+- `tests/test_app_services.py` — 三个应用服务契约失败测试（简报内容，逐字）
+
+重写：
+- `services/memory_service.py` — 构造函数 `(repository, extractor=None)`；模型调用改为通过 `MemoryExtractorPort` 消费；保留 `_ALLOWED_KEYS`/`_INTENT_KEYWORDS`/`_SHOPPING_KEYWORDS`/`_SHOPPING_INTENTS`/`_is_explicit` 与 `select_for_query` 全部筛选规则
+
+修改：
+- `services/context_builder.py` — ORM 导入改 `domain.entities`，`scope_label == "OUT"` 改 `ScopeLabel.OUT`，算法逐行未动
+- `tests/test_context_builder.py` — 改用领域 dataclass 构造主题/消息/记忆（断言原文未动）
+- `tests/test_memory_service.py` — 改用领域 `MemoryItem` 并注入 fake `MemoryExtractorPort`（场景与断言保留）
+- `changelog.md` — 追加本次进度记录
+
+未修改 `services/chat_service.py`（Task 7 切换）、`tests/test_chat_service_memory.py`，也未改 `domain/`、`db/`、`models/`、`agent/`（已验证产物）。
+
+无需更新 `README.md`：外部 HTTP 契约、表结构、配置键与依赖均未变化。
+
+### 关键设计决策与理由
+1. **保持 Task 7 前的调用兼容**：`MemoryService` 构造仍接受单个位置参数（`MemoryService(self.store.memories)`），`select_for_query` 仍是实例方法且签名为 `(memories, query, intent=None)`；`extractor is None` 时 `extract_and_save` 静默返回，故无需改 `chat_service.py`，也无需弱化 `test_chat_service_memory.py` 的断言。
+2. **模型抽取下沉到端口**：记忆提取的 prompt 与模型调用已由 Task 5 的 `agent/memory_agent.py` 承担，本任务只通过 `MemoryExtractorPort` 消费；服务层策略（允许类别、置信度阈值、显式表达正则）仍留在 `MemoryService`。
+3. **方法顺序调整（与简报唯一的实现差异）**：简报中 `ConversationService` 把 `list` 写在 `get_messages` 之前，类体内 `list` 会遮蔽内置 `list`，使其后的 `list[Message]` 注解在 Python 3.13 抛 `TypeError: 'function' object is not subscriptable`；故把 `list` 方法移到使用 `list[...]` 注解的方法之后，公开签名与行为不变。
+4. **`context_builder.py` 只做机械替换**：上下文隔离规则（仅 `topic_id` 严格匹配、`memory_eligible`、非拒答、非 OUT）逐行保留；`str Enum` 与字符串比较成立，`item.role == "human"` 与 `{"human","ai"} <= roles` 无需改写。
+5. **`_is_explicit` 颜色正则写法**：原转义形式的 Unicode 区间改以等价字面区间 `[一-鿿]` 书写（同一 U+4E00–U+9FFF 范围），规避转义歧义，且经比对用例逐例验证一致。
+
+### 遗留事项 / 待办
+- `MemoryService` 在 `chat_service.py` 中仍以 `extractor=None` 构造，长期记忆抽取要等 Task 7 注入真实 `get_memory_extractor()` 才生效。
+- `TopicService.list` 依赖 `TopicRepositoryPort.list`（Task 4 已实现），其成功分支当前无测试覆盖。
+
+### 验证方式与结果
+- TDD RED：`uv run --cache-dir .uv-cache pytest tests/test_app_services.py -q`，`ModuleNotFoundError: No module named 'services.conversation_service'`，`1 error in 0.12s`。
+- TDD GREEN（聚焦）：`uv run --cache-dir .uv-cache pytest tests/test_app_services.py tests/test_context_builder.py tests/test_memory_service.py -q`，`13 passed in 0.07s`。
+- 衔接回归（未修改的测试）：`uv run --cache-dir .uv-cache pytest tests/test_chat_service_memory.py -q`，`12 passed, 1 warning in 0.66s`。
+- 全量回归：`uv run --cache-dir .uv-cache pytest tests -q`，`59 passed, 1 warning in 0.99s`（警告仍是既有 `langgraph` 待弃用提示）。
+- 边界自证：AST 扫描新建/改写的四个 `services` 文件，导入集合与 `{db, api, fastapi, sqlalchemy, rag, agent}` 无交集，输出 `boundary self-check passed`。
+- 正则保真：`_is_explicit` 颜色正则与 HEAD 版本对同一组用例逐例结果一致，输出 `color regex equivalence OK`。
+
+---
+
 ## [2026-09-22] 后端分层重构 Task 5：AI/RAG 适配器迁移到端口
 
 ### 改动标题

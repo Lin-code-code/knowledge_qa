@@ -1,20 +1,53 @@
 """长期偏好按意图筛选与匿名保护测试。"""
 import asyncio
-from types import SimpleNamespace
+from datetime import datetime, timezone
+from uuid import uuid4
 
+from domain.decisions import MemoryCandidate
+from domain.entities import MemoryItem
 from services.memory_service import MemoryService
 
 
 def _memory(key, content):
-    return SimpleNamespace(memory_key=key, content=content)
+    now = datetime.now(timezone.utc)
+    return MemoryItem(
+        id=uuid4(),
+        user_id="u1",
+        memory_type="preference",
+        memory_key=key,
+        content=content,
+        source_message_id=None,
+        confidence=0.95,
+        expires_at=None,
+        status="active",
+        created_at=now,
+        updated_at=now,
+    )
+
+
+class FakeMemoryRepo:
+    def __init__(self):
+        self.upserts = []
+
+    async def list_active(self, user_id, limit=12):
+        return []
+
+    async def upsert(self, **kwargs):
+        self.upserts.append(kwargs)
+
+
+class FakeExtractor:
+    def __init__(self, candidates=()):
+        self.candidates = list(candidates)
+        self.calls = 0
+
+    def extract(self, _user_message):
+        self.calls += 1
+        return self.candidates
 
 
 def _service():
-    service = MemoryService.__new__(MemoryService)
-    service.prompt = ""
-    service.threshold = 0.8
-    service.model = None
-    return service
+    return MemoryService(FakeMemoryRepo())
 
 
 def test_select_for_query_filters_by_query_keywords():
@@ -66,28 +99,9 @@ def test_select_for_query_returns_empty_for_unrelated_question():
 
 
 def test_anonymous_user_never_extracts_or_saves():
-    class FakeRepo:
-        def __init__(self):
-            self.upserts = []
-
-        async def upsert(self, **_kwargs):
-            self.upserts.append(_kwargs)
-
-    class FakeModel:
-        def __init__(self):
-            self.calls = 0
-
-        def invoke(self, _messages):
-            self.calls += 1
-            return "[]"
-
-    repo = FakeRepo()
-    model = FakeModel()
-    service = MemoryService.__new__(MemoryService)
-    service.repository = repo
-    service.model = model
-    service.prompt = ""
-    service.threshold = 0.8
+    repo = FakeMemoryRepo()
+    extractor = FakeExtractor()
+    service = MemoryService(repo, extractor)
 
     asyncio.run(
         service.extract_and_save(
@@ -97,28 +111,16 @@ def test_anonymous_user_never_extracts_or_saves():
         )
     )
 
-    assert model.calls == 0
+    assert extractor.calls == 0
     assert repo.upserts == []
 
 
 def test_extract_and_save_skips_low_confidence():
-    class FakeRepo:
-        def __init__(self):
-            self.upserts = []
-
-        async def upsert(self, **_kwargs):
-            self.upserts.append(_kwargs)
-
-    class FakeModel:
-        def invoke(self, _messages):
-            return '[{"memory_key":"size","content":"常用尺码 L","confidence":0.5}]'
-
-    repo = FakeRepo()
-    service = MemoryService.__new__(MemoryService)
-    service.repository = repo
-    service.model = FakeModel()
-    service.prompt = ""
-    service.threshold = 0.8
+    repo = FakeMemoryRepo()
+    extractor = FakeExtractor(
+        [MemoryCandidate(memory_key="size", content="常用尺码 L", confidence=0.5)]
+    )
+    service = MemoryService(repo, extractor)
 
     asyncio.run(
         service.extract_and_save(

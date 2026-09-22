@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 
-from models.memory_item import MemoryItem
-from models.conversation import ConversationTopic, Message
 from core.config import db_conf
+from domain.entities import ConversationTopic, MemoryItem, Message
+from domain.enums import ScopeLabel
 
 
 def _estimate_tokens(text: str) -> int:
@@ -69,7 +69,7 @@ class ContextBuilder:
             if (
                 item.memory_eligible is False
                 or item.is_refusal is True
-                or item.scope_label == "OUT"
+                or item.scope_label == ScopeLabel.OUT
                 or item.turn_id is None
             ):
                 continue

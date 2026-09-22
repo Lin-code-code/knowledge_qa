@@ -2,16 +2,55 @@
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from models.conversation import ConversationTopic, Message
-from models.memory_item import MemoryItem
+from domain.entities import ConversationTopic, MemoryItem, Message
+from domain.enums import Role, ScopeLabel, TopicStatus
 from services.context_builder import ContextBuilder, _estimate_tokens
 
 
+def _topic(label="T恤洗护", summary=""):
+    now = datetime.now(timezone.utc)
+    return ConversationTopic(
+        id=uuid4(),
+        conversation_id=uuid4(),
+        topic_label=label,
+        summary=summary,
+        last_intent=None,
+        scope_label=ScopeLabel.IN,
+        confidence=0.0,
+        status=TopicStatus.ACTIVE,
+        summary_version=0,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _memory(**kwargs):
+    now = datetime.now(timezone.utc)
+    data = {
+        "id": uuid4(),
+        "user_id": "u1",
+        "memory_type": "preference",
+        "memory_key": "size",
+        "content": "",
+        "source_message_id": None,
+        "confidence": 0.95,
+        "expires_at": None,
+        "status": "active",
+        "created_at": now,
+        "updated_at": now,
+    }
+    data.update(kwargs)
+    return MemoryItem(**data)
+
+
 def _message(topic_id, turn_id, role, content, **kwargs):
+    if kwargs.get("scope_label") is not None:
+        kwargs["scope_label"] = ScopeLabel(kwargs["scope_label"])
     return Message(
+        conversation_id=uuid4(),
         topic_id=topic_id,
         turn_id=turn_id,
-        role=role,
+        role=Role(role),
         content=content,
         created_at=datetime.now(timezone.utc),
         **kwargs,
@@ -19,7 +58,7 @@ def _message(topic_id, turn_id, role, content, **kwargs):
 
 
 def test_filters_other_topic_refusal_and_unpaired_messages():
-    current_topic = ConversationTopic(id=uuid4(), topic_label="T恤洗护")
+    current_topic = _topic(label="T恤洗护")
     other_topic = uuid4()
     valid_turn = uuid4()
     refusal_turn = uuid4()
@@ -55,7 +94,7 @@ def test_filters_other_topic_refusal_and_unpaired_messages():
 
 
 def test_topic_context_rejects_messages_without_topic_id():
-    current_topic = ConversationTopic(id=uuid4(), topic_label="T恤洗护")
+    current_topic = _topic(label="T恤洗护")
     turn = uuid4()
     messages = [
         _message(None, turn, "human", "没有主题归属的问题"),
@@ -76,18 +115,13 @@ def test_topic_context_rejects_messages_without_topic_id():
 
 
 def test_trim_keeps_budget_and_confirmed_preferences():
-    topic = ConversationTopic(
-        id=uuid4(),
-        topic_label="T恤推荐",
-        summary="已确认的主题摘要。" * 300,
-    )
+    topic = _topic(label="T恤推荐", summary="已确认的主题摘要。" * 300)
     turn = uuid4()
     messages = [
         _message(topic.id, turn, "human", "用户参数。" * 120),
         _message(topic.id, turn, "ai", "建议内容。" * 120),
     ]
-    memory = MemoryItem(
-        status="active",
+    memory = _memory(
         memory_key="size",
         content="常用尺码 L",
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
@@ -108,9 +142,8 @@ def test_trim_keeps_budget_and_confirmed_preferences():
 
 
 def test_expired_memory_is_not_injected():
-    topic = ConversationTopic(id=uuid4(), topic_label="T恤推荐")
-    memory = MemoryItem(
-        status="active",
+    topic = _topic(label="T恤推荐")
+    memory = _memory(
         memory_key="color",
         content="偏好黑色",
         expires_at=datetime.now(timezone.utc) - timedelta(days=1),
