@@ -15,6 +15,29 @@
 
 ---
 
+## [2026-09-22] 后端 domain/service/db/api 分层重构
+
+### 改动标题
+将后端从 API/Service 直接依赖 Repository/ORM 的结构迁移为 domain/service/db/api 四层，并保持外部契约兼容。本条是 Task 1-8 的**总结记录**，逐任务细节见下方各 Task 条目。
+
+### 改动文件清单
+新建 `domain/`、`db/models/`、`db/mappers.py`、`db/repositories/`、`api/dependencies.py`、应用服务和架构边界测试；迁移 Agent/RAG 适配器；删除旧 `models/` 和 `db/*_repo.py`（Task 9 另删 `services/{guard_service,summary_service,topic_router}.py` 三个临时转发 shim）。
+
+### 关键设计决策与理由
+兼容优先；domain 不依赖框架；Repository 返回领域实体且不提交事务（事务边界由 `db/session.py:get_db` 持有）；API 通过组合根 `api/dependencies.py` 注入 Service；AI/RAG 作为端口适配器；边界由 `tests/test_architecture_boundaries.py` 冻结。
+
+### 遗留事项 / 待办
+无。已知覆盖缺口（待裁决，未擅自改动）：边界测试的 `forbidden` 集合为 `{api, db, fastapi, sqlalchemy, agent, rag}`，不含 `schemas`；`services/` 目前不导入 `schemas`，但将来若导入 HTTP DTO 不会被拦住。
+
+### 验证方式与结果
+- 全量测试：`uv run --cache-dir .uv-cache pytest tests -q` → **72 passed, 1 warning in 1.17s**（1 warning 仍为既有 `langgraph.checkpoint.serde.encrypted` 的 LangChainPendingDeprecationWarning）。
+- 编译检查：`uv run --cache-dir .uv-cache python -m compileall -q main.py api services domain db agent rag core schemas utils` → 退出码 **0**。
+- 装配冒烟：`python -c "from main import app; print(sorted({r.path for r in app.routes}))"` → 打印 18 条路径（含 `/`、`/docs`、`/openapi.json`、`/redoc`、`/static`），无 import/装配异常。
+- 空白检查：`git diff --check` → 无空白错误行（仅 git 对本次编辑文件的 `LF will be replaced by CRLF` 提示，`core.autocrlf=true` 的常规行为）。
+- **全分支零契约变更终验**：AST 解析 `45e8a45`（重构前基线）与 HEAD 各自 `api/` 下的 `APIRouter(prefix=...)` + `@router.<method>("<path>")`，展开为 `(方法, 完整路径)` 集合 —— 两侧均 **14 条**、`symmetric_difference` 为 `[]`（差集为空）。
+
+---
+
 ## [2026-09-22] 后端分层重构 Task 8：DocumentService 与文件 API 迁移
 
 ### 改动标题
@@ -42,7 +65,7 @@
 4. **响应与文案逐条保留**：上传成功四字段 `message`/`filename`/`chunks`/`file_id`（`message` 为"文件解析、切分并写入向量库成功"，`file_id` 为带连字符 UUID 串）、`file_size // 1024` 整除截断、删除成功 `{"message":"文件记录已删除"}`、404 文案"文件记录不存在"、router 上的 `dependencies=[Depends(require_api_key)]`、上传路由 `finally` 中的 `await file.close()`（服务内 `finally` 负责删临时文件）。
 5. **临时文件与向量 id 语义不变**：旧 `file_id = uuid.uuid4().hex` 同时用作临时文件名与向量元数据 `file_id`；新写法 `file_id = uuid4()` + `index_file_id = file_id.hex`，`load_document` 收到同一 hex；旧 `delete_vector_embeddings(file_id.replace("-",""))` 与新 `delete_index_records(file_id.hex)` 等价。
 6. **补齐简报测试遗漏的 import**：简报 Step 1 的测试代码直接使用 `DocumentService` 但未导入该模块（不补则 RED 为 `NameError` 而非简报预期的 `ModuleNotFoundError`）。已补 `from services.document_service import DocumentService`，其余测试代码逐字未改。
-7. **已修复（修复回合）：`index` 可选化，列表/删除不再构造向量库**。首版 `get_document_service` 也构造了 `VectorStoreService()`，去服务 `GET /api/files/list` 与 `DELETE /api/files/{file_id}`；审查者实测出三条回归/开销：①缺 `SILICONFLOW_API_KEY` 时构造抛错，且依赖先于路由体解析，实测这两条路由 **200→500**、**404→500**；②与凭据无关的恒定开销 **1.345s / 4 条 SQL**（advisory lock、CREATE EXTENSION、pg_class ×2、langchain_pg_collection）；③每次请求滞留一条 PG 连接至 GC（8 次请求后连接数 1→9），而旧 list/delete 只有 1 条查询。首版报告把它记为"低危时序差异、只影响上传"是**错误的低估**，真正回归在两条非上传路由上。修复：`DocumentService.__init__` 的 `index` 改为 `DocumentIndexPort | None = None`（`self.index` 的唯一消费者是 `upload()`；`delete()` 用的 `delete_index_records` 是仓储方法，不走 `self.index`），`upload()` 顶部加 `if self.index is None: raise DocumentIndexError("向量库不可用")`，`get_document_service` 只传仓储。修复后实测：无凭据进程内 list → **200**、delete 合法但不存在的 UUID → **404 "文件记录不存在"**；list 请求 **0.054s / 1 条 SQL / checkedout=0**。
+7. **已修复（修复回合）：`index` 可选化，列表/删除不再构造向量库**。首版 `get_document_service` 也构造了 `VectorStoreService()`，去服务 `GET /api/files/list` 与 `DELETE /api/files/{file_id}`；审查者实测出三条回归/开销：①缺 `SILICONFLOW_API_KEY` 时构造抛错，且依赖先于路由体解析，实测这两条路由 **200→500**、**404→500**；②与凭据无关的恒定开销（首轮审查者实测 **1.345s / 4 条 SQL**：advisory lock、CREATE EXTENSION、pg_class ×2、langchain_pg_collection；此数为**单机单次观测、非可复现基线**，Task 8 复审者实测约 **1.16s / 5 条 SQL**，量级结论一致）；③每次请求滞留一条 PG 连接至 GC（首轮审查者 8 次请求后连接数 1→9；复审者实测为服务端连接 **2→5 波动（GC 相关）**，**无法复现 1→9**；"构造向量库会额外占用连接、倾向于滞留至 GC"的方向性结论保留），而旧 list/delete 只有 1 条查询。首版报告把它记为"低危时序差异、只影响上传"是**错误的低估**，真正回归在两条非上传路由上。修复：`DocumentService.__init__` 的 `index` 改为 `DocumentIndexPort | None = None`（`self.index` 的唯一消费者是 `upload()`；`delete()` 用的 `delete_index_records` 是仓储方法，不走 `self.index`），`upload()` 顶部加 `if self.index is None: raise DocumentIndexError("向量库不可用")`，`get_document_service` 只传仓储。修复后实测：无凭据进程内 list → **200**、delete 合法但不存在的 UUID → **404 "文件记录不存在"**；list 请求 **0.054s / 1 条 SQL / checkedout=0**。
 
 ### 遗留事项 / 待办
 - Task 9 待办：删除 `services/{guard_service,summary_service,topic_router}.py` 三个 shim、旧 `db/*_repo.py` 与 `models/` 兼容层。
@@ -66,7 +89,7 @@
 修复回合（审查 REQUEST_CHANGES：I-1 必修 + M-1 补契约测试；提交 `fix(documents): 解除列表与删除路由对向量库的强依赖`）：
 - **I-1 验收（无凭据进程）**：`import main` 后 `os.environ.pop("SILICONFLOW_API_KEY")` 并断言 `present: False`，再走 TestClient → `GET /api/files/list` **200**、`{"files": ...}`；`DELETE /api/files/00000000-0000-0000-0000-000000000000` **404**、detail 与"文件记录不存在"逐字相等；`DELETE /api/files/abc` **500**、detail 与"服务器内部错误，请稍后重试"逐字相等（风险 c 契约仍保持）；`POST /api/files/upload` **500**（上传确实依赖向量库，预期失败）。
 - **I-1 验收（工厂不再构造向量库）**：无凭据进程内 `get_document_service(session)` 构造成功、`service.index is None` 为 `True`、`await service.list_all()` 返回 3 行；`"VectorStoreService" in inspect.getsource(get_document_service)` 为 **False**（`get_upload_document_service` 仍为 True）。
-- **I-1 开销实证**：插桩 `before_cursor_execute` → `GET /api/files/list` **0.054s / 1 条 SQL**（修复前审查者实测 1.345s / 4 条 SQL）；连续 8 次请求后 `pool.checkedout()=0`（修复前连接数 1→9 滞留至 GC）。
+- **I-1 开销实证**：插桩 `before_cursor_execute` → `GET /api/files/list` **0.054s / 1 条 SQL**（修复前首轮审查者实测 1.345s / 4 条 SQL；此二数为**单机观测、非可复现基线**——Task 8 复审者实测约 1.16s / 5 条 SQL、连接为 2→5 波动且无法复现 1→9，"存在与凭据无关的恒定开销"这一实质结论不变）；连续 8 次请求后 `pool.checkedout()=0`（修复前连接滞留至 GC 的倾向不变）。
 - **I-1 契约回归**：三路由 old-vs-new 面比对（`git show 536b2e3:api/documents.py` 重建旧 router）仍 `ALL MATCH: True`；`DELETE` 路径参数类型仍为 `string`。
 - **M-1 测试守卫**：新增 `tests/test_documents_api.py`（5 个用例）。突变实验：把 `api/documents.py` 的 `UnsupportedDocumentTypeError` 分支 `status_code=400` 改为 `599` → 聚焦测试 `1 failed, 4 passed`，报错原文 `assert 599 == 400`（`where 599 = <Response [599 ]>.status_code`）；全量为 `1 failed, 67 passed`（证明该回归在补测试前会假绿）。还原后 `md5sum api/documents.py` 仍为 `16e7dd75555a804404e8c3d604bb5691`、`git diff api/documents.py` 为空。
 - 聚焦：`pytest tests/test_document_service.py tests/test_documents_api.py -q` → `6 passed, 1 warning`。全量：`pytest tests -q` → `68 passed, 1 warning`（63 → 68 的 +5 全部来自 `tests/test_documents_api.py`）。`python -m compileall -q main.py api services domain db agent rag core schemas utils` 退出码 **0**。
@@ -364,7 +387,7 @@
 - TDD GREEN：同一聚焦命令通过，`3 passed in 0.02s`。
 - 编译检查：对 6 个新增 Python 文件运行 `uv run --cache-dir .uv-cache python -m py_compile ...`，退出码 0。
 - 全量回归：`uv run --cache-dir .uv-cache pytest tests -q`，`46 passed, 1 warning in 1.58s`；警告来自既有 `langgraph` 依赖的待弃用提示。
-- 提交：`2ed4d93 refactor(domain): 建立纯领域实体与决策对象`。
+- 提交：`f75655f refactor(domain): 建立纯领域实体与决策对象`。（更正：本条原写 `2ed4d93`，该提交是早期被 rewrite 掉的同名版本、不是 HEAD 的祖先；Task 9 复核时已改为当前分支上的实际提交 `f75655f`。）
 
 ---
 ## [2026-08-23] 企业级会话记忆升级：真实环境全量验证（迁移/接口/端到端/浏览器）

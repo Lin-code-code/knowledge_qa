@@ -134,7 +134,7 @@ psql -h <host> -U <user> -d <dbname> -f scripts/migrate_conversation_memory.sql
     |
     v
 +--------------------------------------+
-|  L0 域内预检 (GuardService)              |   ← 本地 Ollama qwen3.5:4b
+|  L0 域内预检 (GuardAgent)                |   ← 本地 Ollama qwen3.5:4b
 |  YES/NO 分类                           |       解析失败默认放行
 |  越界 → 直接返回拒答，不入库                     |
 +-------------------+------------------+
@@ -158,7 +158,7 @@ psql -h <host> -U <user> -d <dbname> -f scripts/migrate_conversation_memory.sql
                     |
     v
 +--------------------------------------+
-|  L3 分类器 (GuardService)               |   ← 本地 Ollama qwen3.5:4b
+|  L3 分类器 (GuardAgent)                  |   ← 本地 Ollama qwen3.5:4b
 |  IN/OUT/REFUSE 三分类                   |       解析失败默认放行
 |  越界 (OUT) → 替换拒答模板                   |
 +-------------------+------------------+
@@ -203,33 +203,47 @@ FastAPI_chunking/
 │  ├─ security.py              # API Key 鉴权依赖
 │  └─ validators.py            # 通用校验函数（文件扩展名等）
 │
-├─ models/                     # ORM 模型
-│  ├─ base.py                  # DeclarativeBase
-│  ├─ conversation.py          # Conversation + Message + ConversationTopic
-│  ├─ memory_item.py           # MemoryItem
-│  └─ uploaded_file.py         # UploadedFile
+├─ domain/                     # 领域层（纯 Python，无框架依赖）
+│  ├─ entities.py              # 领域实体（Conversation / Message / ConversationTopic / MemoryItem / UploadedFile / FileSummary）
+│  ├─ decisions.py             # 决策对象（TopicDecision / TopicSegment / ChatAnswer / MemoryCandidate）
+│  ├─ enums.py                 # Role / ScopeLabel / TopicAction / TopicStatus
+│  ├─ errors.py                # 会话、主题、记忆、文档领域异常
+│  └─ ports.py                 # 端口契约（typing.Protocol：仓储端口 + AI/检索端口）
 │
-├─ db/                         # 数据访问层
+├─ db/                         # 数据访问层（实现 domain 的 Repository 端口）
 │  ├─ engine.py                # 异步数据库引擎与 session 工厂
-│  ├─ session.py               # get_db() / close_db() 依赖注入
-│  ├─ conversation_repo.py     # 会话、主题与消息 Repository
-│  ├─ topic_repo.py            # 主题切换、摘要乐观更新
-│  ├─ memory_repo.py           # 长期记忆查询、覆盖与删除
-│  └─ file_repo.py             # FileRepository（文件记录 CRUD + 向量删除）
+│  ├─ session.py               # get_db() / close_db()：持有事务边界（请求结束提交，异常回滚）
+│  ├─ mappers.py               # ORM 模型 ↔ 领域实体映射
+│  ├─ models/                  # SQLAlchemy ORM 模型（仅 db 内部使用）
+│  │  ├─ base.py               # DeclarativeBase
+│  │  ├─ conversation.py       # Conversation + Message + ConversationTopic
+│  │  ├─ memory_item.py        # MemoryItem
+│  │  └─ uploaded_file.py      # UploadedFile
+│  └─ repositories/            # Repository 端口实现（均不 commit）
+│     ├─ conversation.py       # 会话、主题与消息仓储
+│     ├─ topic.py              # 主题切换、摘要乐观更新
+│     ├─ memory.py             # 长期记忆查询、覆盖与删除
+│     └─ file.py               # FileRepository（文件记录 CRUD + 向量删除）
 │
-├─ services/                   # 业务编排层
-│  ├─ chat_service.py          # ChatService：L0 预检 + Agent + L3 兜底
-│  ├─ topic_router.py          # 主题/意图/范围路由
+├─ services/                   # 业务编排层（只编排用例，不导入 api/db/agent/rag 与 Web 框架）
+│  ├─ chat_service.py          # ChatService：主题路由 + L0 预检 + Agent + L3 兜底
+│  ├─ conversation_service.py  # 会话创建、列表、消息查询与删除
+│  ├─ topic_service.py         # 主题列表、详情与归档
+│  ├─ document_service.py      # 文件上传、列表与删除用例
 │  ├─ context_builder.py       # 主题隔离、轮次配对和 token 裁剪
-│  ├─ summary_service.py       # 主题滚动摘要
-│  ├─ memory_service.py        # 长期偏好提取与保存
-│  └─ guard_service.py         # GuardService：L0 域内预检 + L3 输出分类器
+│  └─ memory_service.py        # 长期偏好提取与保存
 │
-├─ api/                        # API 层
+├─ api/                        # API 层（只处理 HTTP：参数绑定、状态码与响应体）
 │  ├─ chat.py                  # 问答与会话接口
-│  └─ documents.py             # 文件上传/列表/删除接口
+│  ├─ documents.py             # 文件上传/列表/删除接口
+│  └─ dependencies.py          # 组合根：组装 Repository + Service + 端口适配器
 │
-├─ agent/                      # 智能代理组件
+├─ agent/                      # AI 能力适配器（实现 domain 的 ChatAgent/Guard/Router/Summary/Memory 端口）
+│  ├─ chat_agent.py            # ChatAgent：Query Rewrite + 检索 + 请求级 sources 收集
+│  ├─ guard_agent.py           # GuardAgent：L0 域内预检 + L3 输出分类器
+│  ├─ topic_router.py          # TopicRouter：主题/意图/范围路由
+│  ├─ summary_agent.py         # SummaryAgent：主题滚动摘要
+│  ├─ memory_agent.py          # MemoryExtractor：长期偏好提取
 │  ├─ react_agent.py           # ReactAgent（LangGraph 实现）
 │  ├─ rewrite_agent.py         # RewriteAgent（query 改写，create_agent 封装）
 │  ├─ retrieval_agent.py       # RetrievalAgent（向量检索+Rerank，create_agent 封装）
@@ -283,8 +297,23 @@ FastAPI_chunking/
 │
 ├─ data/                       # 上传文件临时目录
 ├─ logs/                       # 运行日志（按天轮转，保留 30 天）
-└─ tests/                      # pytest 测试（鉴权、接口错误语义、连接串编码）
+└─ tests/                      # pytest 测试（鉴权、接口错误语义、连接串编码、架构边界）
 ```
+
+### 分层与依赖规则
+
+| 层 | 职责 | 依赖约束 |
+|------|------|---------|
+| `api/` | **只处理 HTTP**：参数绑定、鉴权、领域异常 → 状态码与响应体 | 只通过 `api/dependencies.py`（组合根）取用应用服务，不直接导入 Repository 或 ORM |
+| `services/` | **只编排用例**：业务流程与事务内多步调用 | 依赖 `domain` 端口（`typing.Protocol`）与 `core`，不导入 `api`/`db`/`agent`/`rag`/FastAPI/SQLAlchemy |
+| `domain/` | 领域实体、决策对象、枚举、异常与端口契约 | **无框架依赖**，只用标准库 |
+| `db/` | **实现 Repository 端口**：ORM 模型 + 仓储实现 + 映射 | 仓储返回领域实体，不 `commit()`（事务边界由 `db/session.py:get_db` 持有） |
+| `agent/`、`rag/` | 实现 AI/检索端口（Guard、Router、Summary、Memory、ChatAgent、向量库） | 由组合根注入 Service，Service 不直接导入 |
+
+- `api/dependencies.py` 是唯一的**组合根**：把 `db` 仓储、`agent`/`rag` 适配器组装成 Service。
+- 本次分层重构**未改变外部 HTTP 接口（路径、方法、请求/响应字段、状态码与中文文案）、数据库表结构和配置键**。
+
+---
 
 ---
 
@@ -519,11 +548,11 @@ uvicorn main:app --reload
 2. 已有 `chatId` 先确认会话存在，并读取 active topic、最近有效轮次和未过期长期偏好
 3. **TopicRouter** 只接收当前问题和受限上下文，输出主题动作、意图、范围和 `canonical_query`
 4. `CLARIFY` 直接返回澄清；`OUT_OF_SCOPE` 返回拒答；`MIXED` 只把服装子问题交给后续检索
-5. **L0 预检**：`GuardService.check_question_scope()` 作为主题路由后的域边界兜底
+5. **L0 预检**：`GuardAgent.check_question_scope()` 作为主题路由后的域边界兜底
 6. `NEW_TOPIC` 归档旧主题并创建新主题；`CONTINUE` 复用当前 active topic
 7. **L1 检索**：`RetrievalAgent.retrieve()`（向量宽松召回 candidate_k → Rerank 精排 → `rerank_score_min` 过滤；失败降级为向量 top_n）
 8. **L2 Agent**：`ReactAgent` 只接收标注过的当前问题、主题摘要、最近有效轮次、用户偏好和检索结果；不读取其他主题原始消息
-9. **L3 兜底**：回答经 `GuardService.check()` 检查，越界回答替换为统一拒答并标记不可用
+9. **L3 兜底**：回答经 `GuardAgent.check()` 检查，越界回答替换为统一拒答并标记不可用
 10. 放行回答保存为一对带相同 `turn_id` 的 Human/AI 消息；随后更新摘要和长期偏好，摘要失败不影响当前回答
 
 ### 文件删除流程

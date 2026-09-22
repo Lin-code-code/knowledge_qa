@@ -20,7 +20,7 @@
 
 ## 一个应用里有两套数据库驱动
 
-- 异步 ORM 路径（`db/engine.py`，所有 `db/*_repo.py`）：`postgresql+asyncpg://`，SQLAlchemy async。
+- 异步 ORM 路径（`db/engine.py`，`db/repositories/` 下所有仓储）：`postgresql+asyncpg://`，SQLAlchemy async。
 - 向量路径（`rag/vector_store.py`，`langchain_postgres.PGVector`）：`postgresql+psycopg://`（同步）。
 - 两者都基于同一份 `.env` 凭据。`asyncpg` 和 `psycopg` 都是必需依赖，不要删除任何一个。
 
@@ -32,16 +32,23 @@
 
 ## 架构与约定
 
-- 分层：**`api/`（仅 HTTP）→ `services/`（业务编排）→ `db/*_repo.py`（数据访问）**。新端点放 `api/`，业务逻辑放 `services/`，schema 放 `schemas/`。
+- 分层（依赖方向单向，**不得反向**）：**`api/`（仅 HTTP）→ `services/`（业务编排）→ `domain/`（端口契约）；`db/`、`agent/`、`rag/` 实现端口，由组合根注入。**
+  - `api/` **只处理 HTTP**：参数绑定、鉴权、领域异常 → 状态码与响应体；新端点放 `api/`。
+  - `services/` **只编排用例**：业务逻辑放 `services/`；不得导入 `api`/`db`/`agent`/`rag`/`fastapi`/`sqlalchemy`，只依赖 `domain` 端口与 `core`。
+  - `domain/` **无框架依赖**：实体、决策对象、枚举、异常与端口（`typing.Protocol`），只用标准库。
+  - `db/` **实现 Repository 端口**：ORM 模型放 `db/models/`，仓储实现放 `db/repositories/`，映射放 `db/mappers.py`；对外只暴露领域实体。
+  - `api/dependencies.py` 是**唯一的组合根**：组装仓储、端口适配器与 Service，API 路由只通过 `Depends(get_*_service)` 取用。
+  - `schemas/` 只放 HTTP DTO（Pydantic 请求/响应模型），`services/` 不得导入 `schemas`。
+  - 边界由 `tests/test_architecture_boundaries.py` 守卫：`services/` 导入 `{api, db, fastapi, sqlalchemy, agent, rag}` 或旧模块复活都会直接失败。
 - 鉴权：`api/chat.py` 与 `api/documents.py` 的 router 统一挂载 `core/security.py:require_api_key` 依赖，`API_KEYS` 留空时向后兼容放行。
 - 会话记忆：一个 `chatId` 可包含多个主题，`conversation_topics` 同时只保留一个 active 主题；主题切换归档旧主题，当前 Agent 只读取 active topic 的摘要、最近有效轮次和已确认长期偏好。
 - 上下文过滤：消息使用 `turn_id` 配对 Human/AI 轮次，只有 `memory_eligible=true`、非拒答、非 OUT 范围消息可进入上下文；不得把完整历史、其他主题原始消息或工具参数传给 Agent。
-- 摘要降级：`SummaryService` 使用本地 Ollama 更新摘要；摘要失败保留旧摘要，不影响主回答，并由 `summary_version` 乐观并发控制避免旧摘要覆盖新摘要。
+- 摘要降级：`SummaryAgent`（`agent/summary_agent.py`）使用本地 Ollama 更新摘要；摘要失败保留旧摘要，不影响主回答，并由 `summary_version` 乐观并发控制避免旧摘要覆盖新摘要。
 - 长期记忆：`MemoryService` 使用本地 Ollama，仅保存用户明确表达且置信度达到阈值的服装偏好；`anonymous` 用户不写入，过期记忆不注入，可通过 `/api/memory` 接口删除。
 - **事务边界（硬性规则）：** Repository 不得调用 `session.commit()`。`db/session.py:get_db` 在请求结束时提交，任何异常都会回滚。Service 层多步写入只需顺序调用各 repo 方法——任一抛异常即整体回滚。不要添加 repo 内的 commit。
-- `ReactAgent` 是**进程级单例**，通过 `services/chat_service.py:_get_react_agent` 的 `lru_cache(maxsize=1)` 实现。状态跨请求共享——往里加每请求状态要小心。
+- `ReactAgent`、`ChatAgent` 都是**进程级单例**，分别由 `agent/react_agent.py:get_react_agent` 与 `agent/chat_agent.py:get_chat_agent` 的 `lru_cache(maxsize=1)` 实现。状态跨请求共享——往里加每请求状态要小心。
 - L1 检索走 `agent/retrieval_agent.py` 的 `RetrievalAgent`（`create_agent` 单例，`get_retrieval_agent()`），工具为 `vector_search`（宽松召回）→ `rerank`（精排过滤），模型用 DeepSeek `get_chat_model()`。**LLM 只驱动工具调用，最终 `list[Document]` 经 `_retrieved_docs_ctx` contextvar 回传**（同步 `invoke` 下工具与 `retrieve` 同线程）；agent 调用失败/无产出时 `retrieve()` 退化为向量 top_n。
-- Chat 的 `sources` 由 `rag_summarize` 工具在检索时写入**请求级 `contextvars` 容器**（`rag/rag_service.py` 的 `_sources_ctx`），`chat_service.process_message` 在 agent 执行后读取。**不要用实例属性/全局变量保存 sources**（`RagService` 是进程级单例，并发会互相覆盖），也不要再检索一遍来填 `sources`。
+- Chat 的 `sources` 由 `rag_summarize` 工具在检索时写入**请求级 `contextvars` 容器**（`rag/rag_service.py` 的 `_sources_ctx`），由 `agent/chat_agent.py:ChatAgent.execute` 在 Agent 执行后读取。**不要用实例属性/全局变量保存 sources**（`RagService` 是进程级单例，并发会互相覆盖），也不要再检索一遍来填 `sources`。
 - 上传流程：流式写入 `data/`，边写边算 MD5，**按 MD5 拒绝重复入库**。`data/` 已 gitignore。向量写入与 `uploaded_files` 记录分属两个事务——`repo.save` 失败时会补偿删除刚写入的向量；存量孤儿用 `uv run python scripts/reconcile_embeddings.py --apply` 清理。
 - 静态前端：根路径 `/` 返回 `static/index.html`；`/static` 仅在该目录存在时挂载。`lifespan` 在关闭时释放异步引擎。
 - 前端主题状态通过 DOM 节点和 `textContent` 渲染；动态文件名、用户消息和 AI 回答不得使用 `innerHTML`、`insertAdjacentHTML` 或内联事件处理器，避免存储型 XSS。
@@ -50,7 +57,7 @@
 
 - 默认聊天模型：**DeepSeek** `deepseek-v4-flash`，经 `get_chat_model()`（`ChatOpenAI`，`base_url=https://api.deepseek.com`，`DEEPSEEK_API_KEY`），用于 ReactAgent 与 RetrievalAgent。
 - 默认嵌入：**SiliconFlow** `BAAI/bge-m3`，经 `get_embed_model()`（`OpenAIEmbeddings`，`SILICONFLOW_API_KEY`）——`rag/vector_store.py` 实际使用的就是它。
-- L0/L3 Guard 走本地 Ollama `get_ollama_llm()`（`OllamaLLM`，`qwen3.5:4b`，`http://localhost:11434`），用于 `services/guard_service.py`。
+- L0/L3 Guard 走本地 Ollama `get_ollama_llm()`（`OllamaLLM`，`qwen3.5:4b`，`http://localhost:11434`），用于 `agent/guard_agent.py`。
 - Query Rewrite 封装为 `agent/rewrite_agent.py` 的 `RewriteAgent`（`create_agent` 进程级单例，`get_rewrite_agent()`），模型用 `get_ollama_chat_model()`（`ChatOllama`，`qwen3.5:4b`）。
 - L1 检索封装为 `agent/retrieval_agent.py` 的 `RetrievalAgent`（`create_agent` 进程级单例，`get_retrieval_agent()`），模型用 `get_chat_model()`（DeepSeek），工具 `vector_search` + `rerank`。
 - 注意 `create_agent` 只接受 `BaseChatModel`，故不能用 `OllamaLLM`（那是 `BaseLLM`）；同步 `invoke` 下异步 `monitor_tool` 中间件无法工作，RewriteAgent/RetrievalAgent 只挂同步 `log_before_model`。

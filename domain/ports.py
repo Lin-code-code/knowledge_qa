@@ -1,3 +1,11 @@
+"""领域端口定义：应用服务依赖的抽象契约，只使用标准库 `typing.Protocol` 描述，不依赖任何框架。
+
+端口实现方：
+- 仓储端口（`ConversationRepositoryPort` / `TopicRepositoryPort` / `MemoryRepositoryPort` / `FileRepositoryPort`）由 `db/` 下的 SQLAlchemy 实现提供；
+- AI 能力端口（`ChatAgentPort` / `TopicClassifierPort` / `GuardPort` / `SummaryGeneratorPort` / `MemoryExtractorPort`）由 `agent/` 下的适配器实现；
+- 检索端口（`DocumentIndexPort`）由 `rag/` 下的向量库适配器实现。
+"""
+
 from datetime import datetime
 from typing import Protocol
 from uuid import UUID
