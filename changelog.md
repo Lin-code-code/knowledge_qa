@@ -15,6 +15,56 @@
 
 ---
 
+## [2026-09-22] 后端分层重构 Task 5：AI/RAG 适配器迁移到端口
+
+### 改动标题
+把主题路由、滚动摘要、L0/L3 护栏、长期记忆提取和聊天执行迁移到 `agent/`，实现 `domain/ports.py` 的五个 AI 能力 Protocol；旧 `services/*` 改为薄转发 shim，保证 Task 7 之前 `services/chat_service.py` 与既有测试不断裂。
+
+### 改动文件清单
+迁移（`git mv`，git 识别为重命名）：
+- `services/topic_router.py` → `agent/topic_router.py`（`TopicRouter`，改用领域实体/决策/枚举）
+- `services/summary_service.py` → `agent/summary_agent.py`（`SummaryService` → `SummaryAgent`）
+- `services/guard_service.py` → `agent/guard_agent.py`（`GuardService` → `GuardAgent`，含工厂改名）
+
+新建：
+- `agent/memory_agent.py` — `MemoryExtractor` + `get_memory_extractor()`（从 `services/memory_service.py` 抽离记忆提取）
+- `agent/chat_agent.py` — `ChatAgent` + `get_chat_agent()`，`execute()` 返回 `ChatAnswer`
+- `tests/test_ai_adapters.py` — 适配器契约失败测试（简报内容，逐字）
+- `services/topic_router.py`、`services/summary_service.py`、`services/guard_service.py` — 兼容转发 shim
+
+修改：
+- `rag/rag_service.py` — 新增 `reset_sources_collection(token)`（只重置 `_sources_ctx`，与 `start_sources_collection` 的 token 语义配套）
+- `tests/test_topic_router.py` — 导入改为 `agent.topic_router` + `domain.entities`；构造器改为领域 dataclass（断言原文未动）
+- `tests/test_chat_service_memory.py` — 仅把 `schemas.topic` 的 `TopicDecision/TopicSegment` 引用改为 `domain.decisions`
+- `changelog.md` — 追加本次进度记录
+
+未修改 `domain/`、`db/`、`models/`、`services/memory_service.py`（Task 6 重写）、`services/chat_service.py`（Task 7 切换）。
+
+无需更新 `README.md`：外部 HTTP 契约、数据库表结构、`.env` 与 YAML 配置键、依赖均未变化。
+
+### 关键设计决策与理由
+1. **`_parse` 用枚举承载分支判定**：`TopicAction`/`ScopeLabel` 是 `str Enum`，`TopicDecision` 改为 dataclass 后仍与字符串比较成立；`OUT/OUT_SCOPE/OUT-OF-SCOPE` 别名归一化与"scope=OUT 强制 OUT_OF_SCOPE"语义原样保留。
+2. **`_fallback` 返回 `TopicDecision` dataclass**：使用 `TopicAction.CONTINUE`/`TopicAction.CLARIFY` 与 `ScopeLabel.IN`，四段文案与澄清问题一字未改。
+3. **ChatAgent 用 `try/finally` 复位两组 token**：`reset_sources_collection(source_token)` + `reset_topic_context(topic_token)`，异常路径也复位，避免 contextvar 泄漏到同一 Task 的后续请求；成功路径 `ChatAnswer(answer=..., sources=list(collect_sources()))`。
+4. **shim 双名导出**：guard shim 同时导出旧名 `GuardService`/`get_guard_service` 与新名 `GuardAgent`/`get_guard_agent`，Task 7 前后两套调用方都能用；topic/summary shim 按简报只导出旧名。
+5. **`agent/` 不反向依赖**：五个适配器只依赖 `domain`/`rag`/`utils`/`core`，无 `services`/`api` 导入（脚本校验通过）。
+6. **不动 `services/chat_service.py`**：当前 `_execute_agent` 仍直接使用 `rag.rag_service` 的四个 helper 并自行 `_sources_ctx.reset`，与新增的 `reset_sources_collection` 并存、互不影响。
+
+### 遗留事项 / 待办
+- 三个 `services/*` shim 仅为兼容转发，Task 7 切换调用方后由 Task 9 删除。
+- `DocumentIndexPort` 未在本任务实现：Task 5 的五个适配器不含文档索引，该端口由 Task 8 的 `DocumentService` 消费（注入式实现）。
+
+### 验证方式与结果
+- TDD RED：`uv run --cache-dir .uv-cache pytest tests/test_ai_adapters.py -q`，`ModuleNotFoundError: No module named 'agent.summary_agent'`，`1 error in 0.13s`。
+- TDD GREEN（聚焦）：`uv run --cache-dir .uv-cache pytest tests/test_ai_adapters.py tests/test_topic_router.py -q`，`9 passed in 0.22s`。
+- 全量回归：`uv run --cache-dir .uv-cache pytest tests -q`，`56 passed, 1 warning in 1.08s`（警告仍是既有 `langgraph` 待弃用提示）。
+- 签名自证：`inspect.signature` 逐参数比对五个适配器与 `ChatAgentPort`/`TopicClassifierPort`/`GuardPort`/`SummaryGeneratorPort`/`MemoryExtractorPort` 的名称/顺序/默认值，全部一致；`ChatAgent.execute` 为协程，其余四个保持同步，输出 `SIGNATURES_OK`。
+- 边界自证：`agent/*.py` 的 AST 导入集合与 `{services, api}` 无交集，输出 `NO_FORBIDDEN_IMPORTS_OK`。
+- 护栏保真：`HEAD:services/guard_service.py` 归一化换行并替换 `GuardService`→`GuardAgent` 后与 `agent/guard_agent.py` 逐行比对，唯一差异是工厂函数名 `get_guard_service`→`get_guard_agent`，解析正则/L0/L3 提示词/默认放行/`refusal_text` 语义不变。
+- token 语义自证：`reset_sources_collection(token)` 复位后 `_sources_ctx.get() is None`；`ChatAgent.execute` 成功与异常两条路径都使 `_sources_ctx`/`_topic_label_ctx` 复位，输出 `RESET_SOURCES_OK` / `CHAT_AGENT_TOKENS_OK`。
+
+---
+
 ## [2026-09-22] 后端分层重构 Task 4：拆分并实现领域仓储端口
 
 ### 改动标题

@@ -24,6 +24,10 @@ def collect_sources() -> list[str]:
     return _sources_ctx.get() or []
 
 
+def reset_sources_collection(token: contextvars.Token) -> None:
+    _sources_ctx.reset(token)
+
+
 def start_topic_context(topic_label: str | None) -> contextvars.Token:
     return _topic_label_ctx.set(topic_label)
 

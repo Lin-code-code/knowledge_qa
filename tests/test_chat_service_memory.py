@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import services.chat_service as chat_module
-from schemas.topic import TopicDecision, TopicSegment
+from domain.decisions import TopicDecision, TopicSegment
 from services.chat_service import ChatService
 from services.context_builder import ContextBuilder
 

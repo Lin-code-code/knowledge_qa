@@ -3,8 +3,37 @@ import json
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from models.conversation import ConversationTopic, Message
-from services.topic_router import TopicRouter
+from agent.topic_router import TopicRouter
+from domain.entities import ConversationTopic, Message
+from domain.enums import Role, ScopeLabel, TopicStatus
+
+
+def _make_topic(topic_label="当前主题", summary="只保留当前主题摘要"):
+    now = datetime.now(timezone.utc)
+    return ConversationTopic(
+        id=uuid4(),
+        conversation_id=uuid4(),
+        topic_label=topic_label,
+        summary=summary,
+        last_intent=None,
+        scope_label=ScopeLabel.IN,
+        confidence=0.0,
+        status=TopicStatus.ACTIVE,
+        summary_version=0,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+def _make_message(topic_id, role, content):
+    return Message(
+        conversation_id=uuid4(),
+        role=role,
+        content=content,
+        topic_id=topic_id,
+        turn_id=uuid4(),
+        created_at=datetime.now(timezone.utc),
+    )
 
 
 def test_parse_plain_json():
@@ -65,30 +94,12 @@ def test_route_failure_uses_limited_context():
 
     model = FailingModel()
     router = TopicRouter(model=model)
-    topic = ConversationTopic(topic_label="当前主题", summary="只保留当前主题摘要")
-    old = Message(
-        topic_id=topic.id,
-        turn_id=uuid4(),
-        role="human",
-        content="很旧的问题",
-        created_at=datetime.now(timezone.utc),
-    )
+    topic = _make_topic()
+    old = _make_message(topic.id, Role.HUMAN, "很旧的问题")
     recent = [
         old,
-        Message(
-            topic_id=topic.id,
-            turn_id=uuid4(),
-            role="human",
-            content="最近的问题",
-            created_at=datetime.now(timezone.utc),
-        ),
-        Message(
-            topic_id=topic.id,
-            turn_id=uuid4(),
-            role="ai",
-            content="最近的回答",
-            created_at=datetime.now(timezone.utc),
-        ),
+        _make_message(topic.id, Role.HUMAN, "最近的问题"),
+        _make_message(topic.id, Role.AI, "最近的回答"),
     ]
     decision = router.route("当前问题", topic=topic, recent_messages=recent)
 
