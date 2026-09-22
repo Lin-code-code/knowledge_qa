@@ -72,7 +72,9 @@ def get_chat_service(db: AsyncSession = Depends(get_db)) -> ChatService:
 
 
 def get_document_service(db: AsyncSession = Depends(get_db)) -> DocumentService:
-    return DocumentService(SqlAlchemyFileRepository(db), VectorStoreService())
+    # 列表/删除不涉及向量库：此处不构造向量库客户端，避免无谓的连接、扩展与咨询锁开销，
+    # 也避免缺 SILICONFLOW_API_KEY 时把这两条只读/删记录的路由拖成 500。
+    return DocumentService(SqlAlchemyFileRepository(db))
 
 
 def get_upload_document_service(

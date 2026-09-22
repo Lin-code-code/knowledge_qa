@@ -37,7 +37,7 @@ class DocumentService:
     def __init__(
         self,
         files: FileRepositoryPort,
-        index: DocumentIndexPort,
+        index: DocumentIndexPort | None = None,
         *,
         data_dir: str | None = None,
         allowed_types: set[str] | None = None,
@@ -50,6 +50,9 @@ class DocumentService:
         }
 
     async def upload(self, filename: str, stream: AsyncDocumentReader) -> DocumentUploadResult:
+        # index 可选：列表/删除路由不需要向量库，故这两个场景不构造 VectorStoreService
+        if self.index is None:
+            raise DocumentIndexError("向量库不可用")
         if not filename:
             raise UnsupportedDocumentTypeError("未检测到上传文件名")
         try:

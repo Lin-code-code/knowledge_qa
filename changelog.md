@@ -24,6 +24,7 @@
 新建：
 - `services/document_service.py` — `DocumentUploadResult`（dataclass，`file` + `chunks`）与 `DocumentService`（`upload` / `list_all` / `delete`）；导入根仅 `asyncio`/`core`/`dataclasses`/`domain`/`hashlib`/`pathlib`/`uuid`，不导入 `db`/`api`/`rag`/FastAPI/SQLAlchemy/`agent`
 - `tests/test_document_service.py` — 简报给定的失败测试（补上简报遗漏的 `from services.document_service import DocumentService`，见"关键设计决策"第 6 条）
+- `tests/test_documents_api.py`（修复回合新增）— `api/documents.py` 上传路由的对外契约守卫：4 个领域异常 → 状态码 + 文案逐字断言（400/400/400/500）、成功响应体四字段与文案、`file_id` 为 36 位带连字符 UUID；用 `app.dependency_overrides[get_upload_document_service]` 注入假服务，不连数据库、不碰向量库
 
 修改：
 - `api/documents.py` — 删除 `asyncio`/`os`/`uuid.hex`/`hashlib`/`AsyncSession`/`get_db`/`FileRepository`/`VectorStoreService`/`pg_conf`/`get_abs_path`/`validate_file_extension` 导入与全部业务逻辑；上传路由改为 `Depends(get_upload_document_service)`、列表与删除改为 `Depends(get_document_service)`；领域异常映射为既有中文 400/404/500 文案
@@ -41,11 +42,13 @@
 4. **响应与文案逐条保留**：上传成功四字段 `message`/`filename`/`chunks`/`file_id`（`message` 为"文件解析、切分并写入向量库成功"，`file_id` 为带连字符 UUID 串）、`file_size // 1024` 整除截断、删除成功 `{"message":"文件记录已删除"}`、404 文案"文件记录不存在"、router 上的 `dependencies=[Depends(require_api_key)]`、上传路由 `finally` 中的 `await file.close()`（服务内 `finally` 负责删临时文件）。
 5. **临时文件与向量 id 语义不变**：旧 `file_id = uuid.uuid4().hex` 同时用作临时文件名与向量元数据 `file_id`；新写法 `file_id = uuid4()` + `index_file_id = file_id.hex`，`load_document` 收到同一 hex；旧 `delete_vector_embeddings(file_id.replace("-",""))` 与新 `delete_index_records(file_id.hex)` 等价。
 6. **补齐简报测试遗漏的 import**：简报 Step 1 的测试代码直接使用 `DocumentService` 但未导入该模块（不补则 RED 为 `NameError` 而非简报预期的 `ModuleNotFoundError`）。已补 `from services.document_service import DocumentService`，其余测试代码逐字未改。
-7. **依赖注入带来的构造时序差异（已知、低危）**：依赖在路由体之前解析，故 `VectorStoreService()`（读取 `SILICONFLOW_API_KEY`、建 PGVector 连接串）现在先于扩展名校验构造。旧代码先校验扩展名再构造。仅在 `SILICONFLOW_API_KEY` 缺失的部署下才有可观察差异（旧：错误扩展名返回 400；新：构造依赖失败返回 500），属该部署下所有上传均已不可用的场景，本次未做额外处理。
+7. **已修复（修复回合）：`index` 可选化，列表/删除不再构造向量库**。首版 `get_document_service` 也构造了 `VectorStoreService()`，去服务 `GET /api/files/list` 与 `DELETE /api/files/{file_id}`；审查者实测出三条回归/开销：①缺 `SILICONFLOW_API_KEY` 时构造抛错，且依赖先于路由体解析，实测这两条路由 **200→500**、**404→500**；②与凭据无关的恒定开销 **1.345s / 4 条 SQL**（advisory lock、CREATE EXTENSION、pg_class ×2、langchain_pg_collection）；③每次请求滞留一条 PG 连接至 GC（8 次请求后连接数 1→9），而旧 list/delete 只有 1 条查询。首版报告把它记为"低危时序差异、只影响上传"是**错误的低估**，真正回归在两条非上传路由上。修复：`DocumentService.__init__` 的 `index` 改为 `DocumentIndexPort | None = None`（`self.index` 的唯一消费者是 `upload()`；`delete()` 用的 `delete_index_records` 是仓储方法，不走 `self.index`），`upload()` 顶部加 `if self.index is None: raise DocumentIndexError("向量库不可用")`，`get_document_service` 只传仓储。修复后实测：无凭据进程内 list → **200**、delete 合法但不存在的 UUID → **404 "文件记录不存在"**；list 请求 **0.054s / 1 条 SQL / checkedout=0**。
 
 ### 遗留事项 / 待办
 - Task 9 待办：删除 `services/{guard_service,summary_service,topic_router}.py` 三个 shim、旧 `db/*_repo.py` 与 `models/` 兼容层。
 - 两处偏离简报之处（决策 1、3）需审查者裁决。
+- M-2（`DocumentService` 服务分支覆盖：空文件 / 重复 MD5 / 非法扩展名 / `load_document` 返回 None / `save` 失败补偿删向量 / 临时文件清理）按审查结论不在修复回合范围，已记入 ledger，待后续任务补。
+- `tests/test_documents_api.py` 只覆盖上传路由（契约测试范围按审查枚举执行）；`/api/files/list` 与 `DELETE` 的状态码/文案目前仅由端到端冒烟实测守卫，未固化为单测。
 
 ### 验证方式与结果
 - TDD RED：`uv run --cache-dir .uv-cache pytest tests/test_document_service.py -q` → `ModuleNotFoundError: No module named 'services.document_service'`，`1 error in 0.13s`（与简报预期一致）。
@@ -59,6 +62,15 @@
 - 导入自证：`grep -nE "asyncio|os|hashlib|sqlalchemy|db\.|rag\." api/documents.py` 无任何匹配（仅保留 `from uuid import UUID` 这一标准库类型导入，用于构造简报约定的 `DocumentService.delete(file_id: UUID)` 入参）。
 - 事务硬规则：`grep -rn "\.commit()" db/ services/ api/` 仅命中 `db/session.py:8`（受认可的事务边界），仓储内无 `commit()`。
 - 编译检查：4 个改动 Python 文件 `uv run --cache-dir .uv-cache python -m py_compile` 全部通过。
+
+修复回合（审查 REQUEST_CHANGES：I-1 必修 + M-1 补契约测试；提交 `fix(documents): 解除列表与删除路由对向量库的强依赖`）：
+- **I-1 验收（无凭据进程）**：`import main` 后 `os.environ.pop("SILICONFLOW_API_KEY")` 并断言 `present: False`，再走 TestClient → `GET /api/files/list` **200**、`{"files": ...}`；`DELETE /api/files/00000000-0000-0000-0000-000000000000` **404**、detail 与"文件记录不存在"逐字相等；`DELETE /api/files/abc` **500**、detail 与"服务器内部错误，请稍后重试"逐字相等（风险 c 契约仍保持）；`POST /api/files/upload` **500**（上传确实依赖向量库，预期失败）。
+- **I-1 验收（工厂不再构造向量库）**：无凭据进程内 `get_document_service(session)` 构造成功、`service.index is None` 为 `True`、`await service.list_all()` 返回 3 行；`"VectorStoreService" in inspect.getsource(get_document_service)` 为 **False**（`get_upload_document_service` 仍为 True）。
+- **I-1 开销实证**：插桩 `before_cursor_execute` → `GET /api/files/list` **0.054s / 1 条 SQL**（修复前审查者实测 1.345s / 4 条 SQL）；连续 8 次请求后 `pool.checkedout()=0`（修复前连接数 1→9 滞留至 GC）。
+- **I-1 契约回归**：三路由 old-vs-new 面比对（`git show 536b2e3:api/documents.py` 重建旧 router）仍 `ALL MATCH: True`；`DELETE` 路径参数类型仍为 `string`。
+- **M-1 测试守卫**：新增 `tests/test_documents_api.py`（5 个用例）。突变实验：把 `api/documents.py` 的 `UnsupportedDocumentTypeError` 分支 `status_code=400` 改为 `599` → 聚焦测试 `1 failed, 4 passed`，报错原文 `assert 599 == 400`（`where 599 = <Response [599 ]>.status_code`）；全量为 `1 failed, 67 passed`（证明该回归在补测试前会假绿）。还原后 `md5sum api/documents.py` 仍为 `16e7dd75555a804404e8c3d604bb5691`、`git diff api/documents.py` 为空。
+- 聚焦：`pytest tests/test_document_service.py tests/test_documents_api.py -q` → `6 passed, 1 warning`。全量：`pytest tests -q` → `68 passed, 1 warning`（63 → 68 的 +5 全部来自 `tests/test_documents_api.py`）。`python -m compileall -q main.py api services domain db agent rag core schemas utils` 退出码 **0**。
+- 报告数字更正：首版报告"`api/dependencies.py` +22/-11"有误，`git diff --numstat 536b2e3..686ba97` 实为 **+21/-1**；影响范围误述为"只影响上传"，实际回归在 `/list` 与 `DELETE` 两条非上传路由上。
 
 ---
 
