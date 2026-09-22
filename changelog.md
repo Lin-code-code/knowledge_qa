@@ -15,6 +15,46 @@
 
 ---
 
+## [2026-09-22] 后端分层重构 Task 4：拆分并实现领域仓储端口
+
+### 改动标题
+新增 `db/repositories/` 包，把旧 `db/*_repo.py` 的查询逻辑按领域端口拆成四个 SQLAlchemy 仓储实现，公开出入口一律返回领域实体或朴素值，不再泄漏 ORM 行对象。
+
+### 改动文件清单
+新建：
+- `db/repositories/__init__.py` — 统一导出四个实现类
+- `db/repositories/conversation.py` — `SqlAlchemyConversationRepository`（会话 + 消息 + 最近主题轮次）
+- `db/repositories/topic.py` — `SqlAlchemyTopicRepository`（含乐观锁 `update_summary`）
+- `db/repositories/memory.py` — `SqlAlchemyMemoryRepository`
+- `db/repositories/file.py` — `SqlAlchemyFileRepository`
+- `tests/test_repository_contracts.py` — 方法存在性与"仓储禁止 commit"契约测试
+
+修改：
+- `changelog.md` — 追加本次进度记录
+
+未修改 `db/conversation_repo.py` 等旧仓储（按计划由 Task 9 统一删除），也未修改 `db/models/`、`db/mappers.py`、`domain/`（已验证产物）。
+
+无需更新 `README.md`：本次只在内部新增适配器层，外部 HTTP、数据库表结构、`.env` 与 YAML 配置键、依赖均未变化。
+
+### 关键设计决策与理由
+1. **旧条件原样迁移**：`get_recent_topic_messages` 逐行保留旧 `get_recent_topic_records` 的过滤条件（`memory_eligible` 为真、非拒答、`scope_label != 'OUT'`、`turn_id` 非空）、`created_at desc, id desc` 排序、`.limit(max_turns * 4)`、按 `turn_id` 分组、只保留同时含 human/ai 的轮次、按时间排序与 Token 预算，唯一差异是查询对象换成 `MessageModel`、返回前走 `to_message`。
+2. **`list_all` 的跨表 UUID 关联原样保留**：`REPLACE(uf.id::TEXT, '-', '') = (lpe.cmetadata ->> 'file_id')` 文本逐字未改，只把返回从 `dict` 换成 `to_file_summary(mapping)`。
+3. **端口命名对齐**：旧 `switch_topic` 改名 `switch`、`delete_vector_embeddings` 改名 `delete_index_records`、`delete_by_id` 参数改 `UUID`，与 Task 2 的 Protocol 严格一致；已用脚本逐参数校验四个实现的签名（参数名 + 默认值）与对应 Protocol 完全相同。
+4. **枚举落库显式取值**：`scope_label` 写库时统一用 `scope_label.value`，落盘字符串与旧路径（调用方传 `"IN"`/`"OUT"` 字符串）完全一致。
+5. **单会话注入**：四个实现都只接收一个 `AsyncSession`，由未来的组合根 `api/dependencies.py` 统一创建；会话仓储不再组合 Topic/Memory 子仓储。
+
+### 遗留事项 / 待办
+- 旧 `db/*_repo.py` 仍被 `services/` 与 `api/` 引用，Task 5-7 完成切换后由 Task 9 删除。
+- 仓储目前只有契约测试，未接入真实 PostgreSQL 的集成测试（设计规格允许优先用 SQL 编译/轻量 fake）。
+
+### 验证方式与结果
+- TDD RED：`uv run --cache-dir .uv-cache pytest tests/test_repository_contracts.py -q`，确认 `ModuleNotFoundError: No module named 'db.repositories'`。
+- TDD GREEN：`uv run --cache-dir .uv-cache pytest tests/test_repository_contracts.py -q`，`2 passed in 0.30s`。
+- 全量回归：`uv run --cache-dir .uv-cache pytest tests -q`，`52 passed, 1 warning in 1.05s`（警告仍是既有 `langgraph` 待弃用提示）。
+- 边界自检：`db/repositories/` 无 `services`/`api`/`agent`/`rag` 导入，无 `.commit(`；`_estimate_tokens` 与旧实现同值（`"你好world"` → 2）；`list_all` 与删除向量两条原始 SQL 文本与旧实现逐字相同。
+
+---
+
 ## [2026-09-22] 后端分层重构 Task 3：迁移 ORM 并建立领域映射器
 
 ### 改动标题
