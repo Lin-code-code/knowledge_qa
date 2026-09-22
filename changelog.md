@@ -15,6 +15,41 @@
 
 ---
 
+## [2026-09-22] 后端分层重构 Task 1：建立纯领域实体、枚举、错误与决策对象
+
+### 改动标题
+新增零框架依赖的 `domain` 基础层，为后续数据库映射、仓储端口和应用服务提供稳定的领域契约。
+
+### 改动文件清单
+新建：
+- `domain/__init__.py` — 导出领域实体与枚举
+- `domain/enums.py` — `Role`、`ScopeLabel`、`TopicAction`、`TopicStatus`
+- `domain/entities.py` — `Conversation`、`Message`、`ConversationTopic`、`MemoryItem`、`UploadedFile`、`FileSummary`
+- `domain/decisions.py` — `TopicDecision`、`TopicSegment`、`ChatAnswer`、`MemoryCandidate`
+- `domain/errors.py` — 会话、主题、记忆和文档领域异常
+- `tests/test_domain_layer.py` — 依赖边界、枚举/默认值和 slots dataclass 测试
+
+修改：
+- `changelog.md` — 追加本次进度记录
+
+无需更新 `README.md`：本次仅建立内部领域契约，没有改变外部 HTTP、数据库或配置行为。
+
+### 关键设计决策与理由
+1. 领域层只依赖标准库和 `domain` 内部模块，避免 FastAPI、SQLAlchemy、LangChain 及上层业务包反向侵入。
+2. 实体和决策对象统一使用 `dataclass(slots=True)`，保证后续映射边界轻量且行为稳定。
+3. 异常按语义分别继承 `LookupError`、`ValueError`、`RuntimeError`，供后续服务层映射使用。
+
+### 遗留事项 / 待办
+- 后续 Task 2+ 按既定端口和映射任务消费这些领域对象。
+
+### 验证方式与结果
+- TDD RED：`uv run --cache-dir .uv-cache pytest tests/test_domain_layer.py -q`，预期 `ModuleNotFoundError: No module named 'domain'`，已确认。
+- TDD GREEN：同一聚焦命令通过，`3 passed in 0.02s`。
+- 编译检查：对 6 个新增 Python 文件运行 `uv run --cache-dir .uv-cache python -m py_compile ...`，退出码 0。
+- 全量回归：`uv run --cache-dir .uv-cache pytest tests -q`，`46 passed, 1 warning in 1.58s`；警告来自既有 `langgraph` 依赖的待弃用提示。
+- 提交：`2ed4d93 refactor(domain): 建立纯领域实体与决策对象`。
+
+---
 ## [2026-08-23] 企业级会话记忆升级：真实环境全量验证（迁移/接口/端到端/浏览器）
 
 ### 改动标题
