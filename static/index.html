@@ -51,10 +51,21 @@
     <main class="main-content">
       <header class="main-header">
         <div class="header-left">
-          <h1 class="header-title" id="headerTitle">新对话</h1>
-          <button class="header-new-chat-btn" onclick="startNewChat()">
+          <div class="header-title-wrap">
+            <h1 class="header-title" id="headerTitle">新对话</h1>
+            <div class="topic-status" id="topicStatus" hidden>
+              <span class="topic-status-label">当前主题</span>
+              <span class="topic-status-value" id="currentTopicLabel"></span>
+              <span class="topic-status-action" id="topicActionNotice"></span>
+            </div>
+          </div>
+          <button class="header-new-chat-btn" data-action="new-chat">
             <span>+</span>
             <span>新对话</span>
+          </button>
+          <button class="topic-history-btn" data-action="show-topics" title="查看主题历史" disabled>
+            <span>☰</span>
+            <span>主题历史</span>
           </button>
         </div>
         <div class="header-status">
@@ -81,10 +92,8 @@
                   id="messageInput" 
                   placeholder="输入您的问题..." 
                   rows="1"
-                  onkeydown="handleKeyDown(event)"
-                  oninput="autoResize(this)"
                 ></textarea>
-                <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+                <button class="send-btn" id="sendBtn">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M22 2L11 13"></path>
                     <path d="M22 2L15 22L11 13L2 9L22 2Z"></path>
@@ -163,6 +172,15 @@
       </div>
       
       <div class="modal-section">
+        <div class="section-label">API Key</div>
+        <div class="api-key-row">
+          <input type="password" id="apiKeyInput" class="api-key-input" placeholder="留空表示清除" autocomplete="off">
+          <button class="api-key-save" id="apiKeySave">保存</button>
+        </div>
+        <div class="api-key-hint">服务端配置 API_KEYS 后，在此填写 X-API-Key</div>
+      </div>
+
+      <div class="modal-section">
         <div class="section-label">主题选择</div>
         <div class="theme-grid">
           <div class="theme-option" data-theme="dark">
@@ -183,6 +201,21 @@
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="topicModal">
+    <div class="modal topic-modal">
+      <div class="modal-header">
+        <h2 class="modal-title">主题历史</h2>
+        <button class="modal-close" id="topicModalClose" title="关闭">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18"></path>
+            <path d="M6 6L18 18"></path>
+          </svg>
+        </button>
+      </div>
+      <div class="topic-list" id="topicListContainer"></div>
     </div>
   </div>
 

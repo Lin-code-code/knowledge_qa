@@ -8,9 +8,10 @@ from rag.vector_store import VectorStoreService
 from core.config import pg_conf
 from core.paths import get_abs_path
 from core.validators import validate_file_extension
+from core.security import require_api_key
 from db.file_repo import FileRepository
 
-router = APIRouter(prefix="/api/files", tags=["Files"])
+router = APIRouter(prefix="/api/files", tags=["Files"], dependencies=[Depends(require_api_key)])
 
 @router.post("/upload")
 async def upload_and_split(

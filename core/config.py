@@ -10,6 +10,8 @@ class EnvConfig(BaseSettings):
     DB_USER: str = Field(..., validation_alias=AliasChoices("DB_USER", "USER", "user"), repr=False)
     DB_PASSWORD: str = Field(validation_alias=AliasChoices("DB_PASSWORD", "PASSWORD", "password"))
     DB_NAME: str = Field(validation_alias=AliasChoices("DB_NAME", "DB", "database", "dbname"))
+    # API Key 鉴权：逗号分隔的多个 key；留空表示不启用鉴权
+    API_KEYS: str = Field(default="", validation_alias=AliasChoices("API_KEYS", "api_keys"))
 
     model_config = SettingsConfigDict(
         env_file=get_abs_path(".env"),

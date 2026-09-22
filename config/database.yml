@@ -19,3 +19,13 @@ llm_max_concurrency: 50
 # 会复用旧话题的工具调用（如洗护问题调尺码工具），prompt 软约束对 qwen3.7-max 不可靠。
 # 服装客服场景用户问题大多独立，多轮指代极少；若需指代消解（"它怎么洗"），可调为 1。
 agent_history_turns: 0
+
+# 企业级会话记忆开关。关闭后保留基础问答链路，但不读取/写入主题记忆。
+conversation_memory_enabled: true
+topic_router_enabled: true
+long_term_memory_enabled: true
+summary_enabled: true
+memory_confidence_threshold: 0.8
+memory_max_items: 12
+topic_recent_turns: 2
+context_max_tokens: 2000

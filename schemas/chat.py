@@ -4,11 +4,14 @@ from typing import List, Optional
 class ChatRequest(BaseModel):
     message: str
     chatId: Optional[str] = None
+    user_id: Optional[str] = "anonymous"
 
 class ChatResponse(BaseModel):
     answer: str
     sources: Optional[List[str]] = []
     chatId: Optional[str] = None
+    topicId: Optional[str] = None
+    topicAction: Optional[str] = None
 
 class ChatDeleteResponse(BaseModel):
     message: str

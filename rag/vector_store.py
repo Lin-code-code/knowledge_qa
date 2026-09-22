@@ -1,12 +1,27 @@
 from langchain_core.documents import Document
 from langchain_postgres import PGVector
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from sqlalchemy.engine import URL
 
 from core.config import pg_conf, env_conf
 from core.logger import logger
 from utils.file_handler import pdf_loader, txt_loader
 
 from rag.model.factory import get_embed_model
+
+
+def build_vector_db_url() -> str:
+    """构造 PGVector 同步连接串，密码特殊字符自动 URL 编码。"""
+    url = URL.create(
+        "postgresql+psycopg",
+        username=env_conf.DB_USER,
+        password=env_conf.DB_PASSWORD,
+        host=env_conf.DB_HOST,
+        port=env_conf.DB_PORT,
+        database=env_conf.DB_NAME,
+    )
+    return url.render_as_string(hide_password=False)
+
 
 class VectorStoreService:
     def __init__(
@@ -19,10 +34,7 @@ class VectorStoreService:
         self.chunk_overlap = chunk_overlap
 
         if connection_str is None:
-            connection_str = (
-                f"postgresql+psycopg://{env_conf.DB_USER}:{env_conf.DB_PASSWORD}"
-                f"@{env_conf.DB_HOST}:{env_conf.DB_PORT}/{env_conf.DB_NAME}"
-            )
+            connection_str = build_vector_db_url()
         self.conn_str = connection_str
 
         self.vector_store = PGVector(

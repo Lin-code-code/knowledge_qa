@@ -225,6 +225,13 @@ body {
   padding: 0 4px;
 }
 
+.chat-history-empty {
+  padding: 16px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .chat-history-item {
   padding: 8px 12px;
   border-radius: var(--radius-sm);
@@ -345,6 +352,67 @@ body {
   display: flex;
   align-items: center;
   gap: 16px;
+  min-width: 0;
+}
+
+.header-title-wrap {
+  min-width: 0;
+}
+
+.topic-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 3px;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.topic-status-value {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--accent-blue);
+}
+
+.topic-status-action {
+  color: var(--accent-green);
+}
+
+.topic-status-action.new_topic {
+  color: var(--accent-orange);
+}
+
+.topic-status-action.clarify,
+.topic-status-action.out_of_scope {
+  color: var(--accent-red);
+}
+
+.topic-history-btn {
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-secondary);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.topic-history-btn:hover:not(:disabled) {
+  border-color: var(--accent-blue);
+  color: var(--accent-blue);
+}
+
+.topic-history-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .header-title {
@@ -506,6 +574,8 @@ body {
   border-radius: var(--radius-lg);
   font-size: 15px;
   line-height: 1.7;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .message.assistant .message-bubble {
@@ -1108,11 +1178,122 @@ body {
   margin-bottom: 0;
 }
 
+.topic-modal {
+  max-width: 560px;
+}
+
+.topic-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.topic-list-item {
+  padding: 12px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+}
+
+.topic-list-item.active {
+  border-color: var(--accent-blue);
+  background: rgba(74, 158, 255, 0.08);
+}
+
+.topic-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.topic-list-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.topic-status-badge {
+  flex-shrink: 0;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.topic-status-badge.active {
+  color: var(--accent-green);
+  border-color: rgba(16, 185, 129, 0.45);
+}
+
+.topic-list-meta {
+  margin-top: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.topic-list-empty {
+  padding: 32px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
 .section-label {
   font-size: 14px;
   font-weight: 500;
   color: var(--text-secondary);
   margin-bottom: 12px;
+}
+
+.api-key-row {
+  display: flex;
+  gap: 8px;
+}
+
+.api-key-input {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.api-key-input:focus {
+  border-color: var(--accent-blue);
+}
+
+.api-key-save {
+  padding: 10px 16px;
+  background: var(--gradient-primary);
+  border: none;
+  border-radius: var(--radius-sm);
+  color: white;
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: opacity 0.2s;
+}
+
+.api-key-save:hover {
+  opacity: 0.9;
+}
+
+.api-key-hint {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .theme-grid {
@@ -1228,6 +1409,18 @@ body {
 
   .theme-grid {
     grid-template-columns: 1fr;
+  }
+
+  .topic-history-btn {
+    padding: 6px 8px;
+  }
+
+  .topic-history-btn span:last-child {
+    display: none;
+  }
+
+  .topic-status-value {
+    max-width: 130px;
   }
 
   .file-list-header,

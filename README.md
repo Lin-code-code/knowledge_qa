@@ -1,6 +1,6 @@
 # 服装垂直客服 RAG 问答系统
 
-基于 **Python + FastAPI + LangChain + PGVector** 的服装行业智能问答系统，带三层安全防乱说话架构。
+基于 **Python + FastAPI + LangChain + PGVector** 的服装行业智能问答系统，带四层安全防乱说话架构（L0 预检 + L1/L2/L3）。
 
 ---
 
@@ -8,7 +8,8 @@
 
 - [项目概览](#项目概览)
 - [功能特性](#功能特性)
-- [三层防乱说话架构](#三层防乱说话架构)
+- [企业级会话记忆](#企业级会话记忆)
+- [四层防乱说话架构](#四层防乱说话架构)
 - [技术栈](#技术栈)
 - [项目结构](#项目结构)
 - [运行要求](#运行要求)
@@ -22,20 +23,22 @@
 
 ## 项目概览
 
-`FastAPI_chunking` 是一套服装行业垂直客服系统，支持上传知识文件、向量检索、多轮问答，并内置三层安全机制防止大模型胡说八道：
+`FastAPI_chunking` 是一套服装行业垂直客服系统，支持上传知识文件、向量检索、多轮问答，并内置四层安全机制防止大模型胡说八道：
 
 1. 用户上传服装知识文件（尺码表、洗护说明、面料介绍等）
 2. 系统读取文件并按配置切分文本，写入 PGVector
 3. 用户提问时，先经 L0 域内预检判定是否属于服装领域
 4. 越界问题直接拒答（不入库、不调 Agent）
-5. 域内问题经向量检索 + Rerank 精排后交给 Agent 生成回答
-6. 回答经 L3 分类器兜底，越界输出替换为统一拒答话术
+5. 主题路由判断继续当前主题、新建主题、混合问题、澄清或拒答
+6. 当前主题摘要、最近有效轮次和用户明确偏好组成受限上下文
+7. 域内问题经向量检索 + Rerank 精排后交给 Agent 生成回答
+8. 回答经 L3 分类器兜底，越界输出替换为统一拒答话术
 
 ---
 
 ## 功能特性
 
-### 三层防乱说话
+### 四层防乱说话
 
 | 层级 | 名称 | 位置 | 作用 |
 |------|------|------|------|
@@ -58,15 +61,19 @@
 - 基于向量检索 + Rerank 精排召回相关内容
 - 支持基于 ReactAgent 代理模式进行意图识别和工具调用
 - 使用提示词模板组织回答（RAG 原文返回，Agent 自行分析匹配）
-- 支持多轮对话上下文（自动过滤历史拒答记录）
+- 消息历史会落库，但 Agent 不再接收完整历史；上下文只包含当前 active topic 的摘要、最近有效问答对和按当前问题/意图筛选后的长期偏好
 - 检索结果带缓存（可配置 TTL 与容量上限）
 - 支持返回会话 ID，便于前端继续追问
 
 ### 会话管理
 
-- L0 越界提问与 L3 拦截的越界回答均不创建会话、不入库（仅 L3 放行的问答才落库）
+- 一个 `chatId` 可以包含多个主题，系统自动维护一个 active topic，主题切换时归档旧主题
+- 拒答、越界消息可以作为审计记录保存，但 `memory_eligible=false`，不会进入后续上下文
+- 澄清问题不执行检索和主 Agent；当前轮标记为不可用于记忆
 - 创建会话、获取会话列表
 - 获取某个会话的消息列表
+- 获取主题列表、主题详情和归档主题
+- 管理用户明确表达的长期服装偏好；偏好按当前问题意图筛选后注入，尺码、颜色、面料、穿着限制四类互不串用
 - 删除会话及其消息
 
 ### 前端入口
@@ -76,7 +83,51 @@
 
 ---
 
-## 三层防乱说话架构
+## 企业级会话记忆
+
+系统把“完整会话”和“生成上下文”分开管理：
+
+```text
+当前用户消息
+    -> TopicRouter（主题/意图/范围判断）
+    -> CONTINUE / NEW_TOPIC / MIXED / CLARIFY / OUT_OF_SCOPE
+    -> 当前主题摘要 + 最近有效轮次 + 用户明确偏好
+    -> 当前问题检索
+    -> ReactAgent 回答与 L3 安全检查
+    -> 保存消息、滚动更新主题摘要、提取长期偏好
+```
+
+- `chatId` 表示完整会话，`topicId` 表示会话内主题。
+- `conversation_topics` 保存主题标签、摘要、意图、范围和摘要版本；同一会话同时只有一个 active 主题。
+- `messages` 增加 `topic_id`、`turn_id`、`intent`、`scope_label`、`is_refusal`、`memory_eligible`，兼容原有消息字段。
+- `memory_items` 只保存用户明确表达的尺码、颜色、面料和穿着限制；`anonymous` 用户不写长期记忆。
+- `conversation_memory_enabled=false` 时保留基础问答和消息落库，但不读取或创建主题、不更新摘要，也不写入长期记忆。
+- 其他主题原始消息、拒答消息、越界内容、工具参数和未确认推断不会进入当前 Agent Prompt。
+- 摘要失败只保留旧摘要，不影响当前回答；摘要更新使用 `summary_version` 做乐观并发控制。
+
+### 主题路由行为
+
+| 动作 | 行为 |
+|------|------|
+| `CONTINUE` | 复用 active topic，用 `canonical_query` 检索 |
+| `NEW_TOPIC` | 归档旧主题，创建新 active topic，隔离旧主题原始消息 |
+| `MIXED` | 只检索服装子问题，对越界子问题使用拒答模板 |
+| `CLARIFY` | 直接返回澄清问题，不检索、不调用主 Agent |
+| `OUT_OF_SCOPE` | 返回统一拒答；新会话不创建，已有会话仅写不可用审计记录 |
+
+### 数据库迁移
+
+ORM 不会自动创建会话相关表。先备份 `conversations`、`messages`，确认数据库支持 `gen_random_uuid()`，再执行幂等迁移：
+
+```powershell
+psql -h <host> -U <user> -d <dbname> -f scripts/migrate_conversation_memory.sql
+```
+
+迁移会启用 `pgcrypto`，创建 `conversation_topics`、`memory_items`，扩展 `messages`，为存量会话建立默认主题并按时间生成 `turn_id`；包含拒答模板的旧消息会被标记为不可进入上下文。
+
+---
+
+## 四层防乱说话架构
 
 ```text
 用户提问
@@ -91,8 +142,8 @@
                     |
     v
 +--------------------------------------+
-|  L1 检索 + Rerank                      |
-|  candidate_k → Rerank 精排             |
+|  L1 检索 + Rerank                      |  ← RetrievalAgent (DeepSeek)
+|  candidate_k → Rerank 精排             |      LLM 只驱动工具调用
 |  rerank_score >= 0.05 过滤             |
 +-------------------+------------------+
                     | 检索结果
@@ -128,7 +179,7 @@
 - **PostgreSQL + PGVector**：向量存储
 - **LangChain & LangGraph**：Agent 编排与大模型调度
 - **LangChain Community / LangChain PGVector**：模型与向量相关能力
-- **DeepSeek**：主聊天模型（ReactAgent）
+- **DeepSeek**：主聊天模型 + 检索 Agent（ReactAgent / RetrievalAgent）
 - **SiliconFlow**：嵌入模型 + Rerank 模型
 - **Ollama**：本地 L0/L3 Guard 分类模型 + Query Rewrite 改写模型
 - **PyYAML**：YAML 配置加载
@@ -149,21 +200,29 @@ FastAPI_chunking/
 │  ├─ config.py                # EnvConfig + 懒加载 YAML 配置
 │  ├─ logger.py                # 日志封装（控制台 + 按天轮转文件）
 │  ├─ paths.py                 # 路径工具（项目根目录发现）
+│  ├─ security.py              # API Key 鉴权依赖
 │  └─ validators.py            # 通用校验函数（文件扩展名等）
 │
 ├─ models/                     # ORM 模型
 │  ├─ base.py                  # DeclarativeBase
-│  ├─ conversation.py          # Conversation + Message
+│  ├─ conversation.py          # Conversation + Message + ConversationTopic
+│  ├─ memory_item.py           # MemoryItem
 │  └─ uploaded_file.py         # UploadedFile
 │
 ├─ db/                         # 数据访问层
 │  ├─ engine.py                # 异步数据库引擎与 session 工厂
 │  ├─ session.py               # get_db() / close_db() 依赖注入
-│  ├─ conversation_repo.py     # ConversationRepository（会话 CRUD）
+│  ├─ conversation_repo.py     # 会话、主题与消息 Repository
+│  ├─ topic_repo.py            # 主题切换、摘要乐观更新
+│  ├─ memory_repo.py           # 长期记忆查询、覆盖与删除
 │  └─ file_repo.py             # FileRepository（文件记录 CRUD + 向量删除）
 │
 ├─ services/                   # 业务编排层
 │  ├─ chat_service.py          # ChatService：L0 预检 + Agent + L3 兜底
+│  ├─ topic_router.py          # 主题/意图/范围路由
+│  ├─ context_builder.py       # 主题隔离、轮次配对和 token 裁剪
+│  ├─ summary_service.py       # 主题滚动摘要
+│  ├─ memory_service.py        # 长期偏好提取与保存
 │  └─ guard_service.py         # GuardService：L0 域内预检 + L3 输出分类器
 │
 ├─ api/                        # API 层
@@ -179,7 +238,7 @@ FastAPI_chunking/
 │     └─ middleware.py         # 工具调用监控与日志
 │
 ├─ rag/                        # RAG 检索与模型工厂
-│  ├─ rag_service.py           # RAG 服务（检索 + Rerank + TTL 缓存）
+│  ├─ rag_service.py           # RAG 编排（改写 → 检索 → sources → 格式化）
 │  ├─ vector_store.py          # PGVector 文档入库与向量检索
 │  └─ model/
 │     ├─ factory.py            # 模型工厂（聊天 / 嵌入 / Rerank / Ollama）
@@ -196,14 +255,21 @@ FastAPI_chunking/
 │  └─ prompt_loader.py         # 提示词模板文件加载（含 guard/scope）
 │
 ├─ schemas/
-│  └─ chat.py                  # Pydantic 请求/响应模型
+│  ├─ chat.py                  # Pydantic 请求/响应模型
+│  ├─ topic.py                 # 主题路由和主题 API 模型
+│  └─ memory.py                # 长期记忆 API 模型
 │
 ├─ prompts/                    # 提示词模板
 │  ├─ main_prompt.txt          # Agent 系统提示词（服装垂直客服）
-│  ├─ rag_summarize.txt        # RAG 检索提示词
-│  ├─ guard_prompt.txt         # L3 分类器 prompt
 │  ├─ scope_check_prompt.txt   # L0 域内预检 prompt
-│  └─ refusal_template.txt     # 统一拒答话术
+│  ├─ guard_prompt.txt         # L3 分类器 prompt
+│  ├─ query_rewrite_prompt.txt # 检索词改写 prompt
+│  ├─ retrieval_prompt.txt     # 检索 Agent prompt
+│  ├─ topic_router_prompt.txt  # 主题路由 prompt
+│  ├─ summary_prompt.txt       # 主题摘要 prompt
+│  ├─ memory_extract_prompt.txt# 长期偏好提取 prompt
+│  ├─ refusal_template.txt     # 统一拒答话术
+│  └─ rag_summarize.txt        # 历史遗留（rag_summarize 不再调 LLM，保留备用）
 │
 ├─ static/                     # 前端静态文件
 │  ├─ index.html               # SPA 入口
@@ -212,11 +278,12 @@ FastAPI_chunking/
 │
 ├─ scripts/                     # 运维脚本
 │  ├─ create_hnsw_index.py      # 为 langchain_pg_embedding 创建 HNSW 索引
+│  ├─ migrate_conversation_memory.sql # 会话记忆幂等迁移
 │  └─ reconcile_embeddings.py   # 清理孤儿向量（上传失败兜底，--apply 执行删除）
 │
 ├─ data/                       # 上传文件临时目录
 ├─ logs/                       # 运行日志（按天轮转，保留 30 天）
-└─ tests/                      # 测试目录（待补充）
+└─ tests/                      # pytest 测试（鉴权、接口错误语义、连接串编码）
 ```
 
 ---
@@ -269,7 +336,8 @@ DB=vectordb
 ### 2. 系统环境变量
 
 - `SILICONFLOW_API_KEY`：用于嵌入、Rerank 模型（**不能放 `.env`**）
-- `DEEPSEEK_API_KEY`：用于主聊天模型（ReactAgent）
+- `DEEPSEEK_API_KEY`：用于主聊天模型（ReactAgent）与检索 Agent（RetrievalAgent）
+- `API_KEYS`：API 鉴权密钥，逗号分隔多个 key（可放 `.env` 或系统环境变量）；未配置时所有 `/api/*` 接口不鉴权
 
 ### 3. `config/pgvector.yml`
 
@@ -283,7 +351,7 @@ DB=vectordb
 
 ### 4. `config/rag.yml`
 
-- `chat_model_name`：Agent 主模型（默认 `deepseek-v4-flash`，DeepSeek）
+- `chat_model_name`：Agent 主模型 / 检索 Agent 模型（默认 `deepseek-v4-flash`，DeepSeek）
 - `embedding_model_name`：嵌入模型（默认 `BAAI/bge-m3`，SiliconFlow）
 - `rerank_model_name` / `rerank_top_n` / `rerank_score_min`：Rerank 配置
 - `retrieval_cache_maxsize` / `retrieval_cache_ttl`：检索结果缓存
@@ -293,10 +361,18 @@ DB=vectordb
 
 - `async_pool_size` / `async_max_overflow` / `pool_recycle` / `pool_pre_ping`
 - `max_messages` / `max_tokens` / `llm_max_concurrency`
+- `conversation_memory_enabled`：会话记忆总开关，默认 `true`
+- `topic_router_enabled`：主题路由开关，默认 `true`
+- `long_term_memory_enabled`：长期偏好开关，默认 `true`
+- `summary_enabled`：主题摘要开关，默认 `true`
+- `topic_recent_turns` / `context_max_tokens`：最近轮数与上下文 token 上限
+- `memory_confidence_threshold` / `memory_max_items`：长期记忆置信度阈值与注入条数上限
+
+`conversation_memory_enabled=false` 时只保留原有消息问答链路，主题、摘要和长期偏好均不创建或更新。
 
 ### 6. `config/prompts.yml`
 
-所有提示词文件路径：`main_prompt_path`、`guard_prompt_path`、`scope_check_prompt_path`、`refusal_template_path`、`query_rewrite_prompt_path`。
+所有提示词文件路径：`main_prompt_path`、`guard_prompt_path`、`scope_check_prompt_path`、`refusal_template_path`、`query_rewrite_prompt_path`、`retrieval_prompt_path`、`topic_router_prompt_path`、`summary_prompt_path`、`memory_prompt_path`。
 
 ---
 
@@ -326,6 +402,10 @@ uvicorn main:app --reload
 ---
 
 ## 接口说明
+
+### 接口鉴权
+
+所有 `/api/*` 接口（文件、会话、聊天）均要求请求头 `X-API-Key`。服务端配置 `API_KEYS`（逗号分隔）后即启用校验，缺失或错误的 key 返回 401；`API_KEYS` 未配置时保持不鉴权，便于本地开发。前端在“设置”弹窗中填写并保存 API Key（保存于浏览器 `localStorage`）。
 
 ### 文件上传并入库
 
@@ -375,7 +455,7 @@ uvicorn main:app --reload
 
 **DELETE** `/api/files/{file_id}`
 
-先删除 PGVector 中该文件的向量数据，再删除文件记录，同一事务保证原子性。
+先删除 `uploaded_files` 记录（记录不存在则 404，不触碰向量），再删除 PGVector 中该文件的向量数据，同一事务保证原子性。
 
 ### 多轮问答
 
@@ -394,11 +474,13 @@ uvicorn main:app --reload
 {
   "answer": "建议冷水手洗，避免高温烘干...",
   "sources": ["纯棉洗涤.txt"],
-  "chatId": "uuid"
+  "chatId": "uuid",
+  "topicId": "uuid",
+  "topicAction": "CONTINUE"
 }
 ```
 
-> L0 越界拦截：域外问题直接返回拒答话术，不创建会话、不入库。
+`topicAction` 可能为 `CONTINUE`、`NEW_TOPIC`、`MIXED`、`CLARIFY` 或 `OUT_OF_SCOPE`。现有前端可以忽略 `topicId` 和 `topicAction`，不影响兼容性。`user_id` 可随请求体传入，用于长期偏好归属；默认值为 `anonymous`。
 
 ### 其他接口
 
@@ -407,6 +489,12 @@ uvicorn main:app --reload
 | POST | `/api/conversations` | 创建会话 |
 | GET | `/api/conversations?user_id=anonymous` | 获取会话列表 |
 | GET | `/api/chat/{conversation_id}/messages` | 获取会话消息 |
+| GET | `/api/chat/{conversation_id}/topics` | 获取主题列表，不返回摘要原文 |
+| GET | `/api/chat/{conversation_id}/topics/{topic_id}` | 获取主题详情和摘要 |
+| POST | `/api/chat/{conversation_id}/topics/{topic_id}/archive` | 归档主题 |
+| GET | `/api/memory?user_id=anonymous` | 获取用户长期偏好 |
+| DELETE | `/api/memory/{memory_id}?user_id=anonymous` | 删除一条长期偏好 |
+| DELETE | `/api/memory?user_id=anonymous` | 清除用户全部长期偏好 |
 | DELETE | `/api/chat/{chat_id}` | 删除会话 |
 
 ---
@@ -428,19 +516,22 @@ uvicorn main:app --reload
 ### 问答流程
 
 1. 用户调用 `POST /api/chat/`
-2. **L0 预检**：`GuardService.check_question_scope()` 用轻量模型判定问题是否属于服装领域；越界直接返回拒答，不入库、不创建会话
-3. 已有会话则获取最近历史（自动过滤拒答问答对；`agent_history_turns=0` 时实际不传给 agent）
-4. **L1 检索**：`RetrievalAgent.retrieve()`（create_agent，工具 `vector_search` 宽松召回 candidate_k → `rerank` 精排 → rerank_score >= rerank_score_min 过滤；LLM 只驱动工具调用，文档经 contextvar 回传；agent 失败降级为向量 top_n）
-5. **L2 Agent**：`ReactAgent` 接收历史 + 问题，通过 `rag_summarize` 工具获取原文资料（不做 LLM 总结），自行分析匹配回答；检索到的来源在请求内收集（contextvar，按请求隔离）
-6. **L3 兜底**：Agent 回答经 `GuardService.check()` 检查，越界（OUT）替换为统一拒答模板，且**不创建会话、不入库**
-7. L3 放行后才创建/复用会话，返回 `(answer, sources, chatId)`，消息写入历史（由 `get_db()` 统一提交）
+2. 已有 `chatId` 先确认会话存在，并读取 active topic、最近有效轮次和未过期长期偏好
+3. **TopicRouter** 只接收当前问题和受限上下文，输出主题动作、意图、范围和 `canonical_query`
+4. `CLARIFY` 直接返回澄清；`OUT_OF_SCOPE` 返回拒答；`MIXED` 只把服装子问题交给后续检索
+5. **L0 预检**：`GuardService.check_question_scope()` 作为主题路由后的域边界兜底
+6. `NEW_TOPIC` 归档旧主题并创建新主题；`CONTINUE` 复用当前 active topic
+7. **L1 检索**：`RetrievalAgent.retrieve()`（向量宽松召回 candidate_k → Rerank 精排 → `rerank_score_min` 过滤；失败降级为向量 top_n）
+8. **L2 Agent**：`ReactAgent` 只接收标注过的当前问题、主题摘要、最近有效轮次、用户偏好和检索结果；不读取其他主题原始消息
+9. **L3 兜底**：回答经 `GuardService.check()` 检查，越界回答替换为统一拒答并标记不可用
+10. 放行回答保存为一对带相同 `turn_id` 的 Human/AI 消息；随后更新摘要和长期偏好，摘要失败不影响当前回答
 
 ### 文件删除流程
 
 1. 调用 `DELETE /api/files/{file_id}`
 2. 先删除 `uploaded_files` 记录；记录不存在则返回 404，不触碰向量
 3. 再删除 PGVector 中该文件的向量数据
-4. 两步同一事务，任一步失败整体回滚，避免孤立数据
+4. 文件记录与 PGVector 属于不同存储事务，失败时依靠补偿删除和 `scripts/reconcile_embeddings.py` 对账清理；不能宣称严格 ACID
 
 ---
 
@@ -479,6 +570,14 @@ uvicorn main:app --reload
 ### 6. 越界问题被放行 / L0 拦截失效怎么办？
 
 检查本地 Ollama 是否已启动（`ollama serve`）且已拉取 `qwen3.5:4b` 模型。Ollama 未启动时，L0/L3 会静默放行（解析失败默认 IN），越界拦截将失效。
+
+### 7. 接口返回 401 怎么办？
+
+服务端已配置 `API_KEYS` 时，所有 `/api/*` 请求必须携带 `X-API-Key` 请求头。前端在“设置”中填写与 `API_KEYS` 中任一值一致的 Key 即可；命令行调用示例：
+
+```powershell
+Invoke-RestMethod -Uri http://127.0.0.1:8000/api/files/list -Headers @{ "X-API-Key" = "your-key" }
+```
 
 ---
 

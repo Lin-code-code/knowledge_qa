@@ -1,4 +1,3 @@
-from sqlalchemy.ext.asyncio import AsyncSession
 from db.engine import engine, async_session_factory
 
 

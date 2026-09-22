@@ -1,5 +1,5 @@
 # 硅基流动
-chat_model_name: deepseek-v4-flash
+chat_model_name: deepseek-flash
 embedding_model_name: BAAI/bge-m3                    # 1024维度
 
 # 检索缓存配置
@@ -15,3 +15,7 @@ rerank_score_min: 0.05
 
 # Query Rewrite 配置
 query_rewrite_enabled: true
+rewrite_model_name: Qwen/Qwen2.5-7B-Instruct
+
+siliconflow_base_url: https://api.siliconflow.cn/v1
+deepseek_base_url: https://api.deepseek.com

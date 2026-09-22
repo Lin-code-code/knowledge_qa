@@ -4,3 +4,6 @@ refusal_template_path: prompts/refusal_template.txt
 scope_check_prompt_path: prompts/scope_check_prompt.txt
 query_rewrite_prompt_path: prompts/query_rewrite_prompt.txt
 retrieval_prompt_path: prompts/retrieval_prompt.txt
+topic_router_prompt_path: prompts/topic_router_prompt.txt
+summary_prompt_path: prompts/summary_prompt.txt
+memory_prompt_path: prompts/memory_extract_prompt.txt

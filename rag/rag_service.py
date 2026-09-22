@@ -11,6 +11,9 @@ from utils.prompt_loader import load_refusal_template
 _sources_ctx: contextvars.ContextVar[list[str]] = contextvars.ContextVar(
     "rag_sources", default=None
 )
+_topic_label_ctx: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "rag_topic_label", default=None
+)
 
 
 def start_sources_collection() -> contextvars.Token:
@@ -21,6 +24,14 @@ def collect_sources() -> list[str]:
     return _sources_ctx.get() or []
 
 
+def start_topic_context(topic_label: str | None) -> contextvars.Token:
+    return _topic_label_ctx.set(topic_label)
+
+
+def reset_topic_context(token: contextvars.Token) -> None:
+    _topic_label_ctx.reset(token)
+
+
 class RagService:
     def __init__(self):
         self._refusal_text = load_refusal_template()
@@ -28,8 +39,9 @@ class RagService:
         self._rewrite_enabled = rag_conf.get("query_rewrite_enabled", True)
 
     def rag_summarize(self, query: str) -> str:
+        topic_label = _topic_label_ctx.get()
         if self._rewrite_enabled:
-            query = self._rewriter.rewrite(query)
+            query = self._rewriter.rewrite(query, topic_label=topic_label)
         context_docs = get_retrieval_agent().retrieve(query)
 
         collector = _sources_ctx.get()

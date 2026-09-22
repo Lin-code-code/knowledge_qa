@@ -1,10 +1,21 @@
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy.engine import URL
 from core.config import db_conf, env_conf
 
-ASYNC_DB_URL = (
-    f"postgresql+asyncpg://{env_conf.DB_USER}:{env_conf.DB_PASSWORD}"
-    f"@{env_conf.DB_HOST}:{env_conf.DB_PORT}/{env_conf.DB_NAME}"
-)
+
+def build_async_db_url() -> URL:
+    """构造异步 ORM 连接 URL，密码特殊字符由 URL.create 自动编码。"""
+    return URL.create(
+        "postgresql+asyncpg",
+        username=env_conf.DB_USER,
+        password=env_conf.DB_PASSWORD,
+        host=env_conf.DB_HOST,
+        port=env_conf.DB_PORT,
+        database=env_conf.DB_NAME,
+    )
+
+
+ASYNC_DB_URL = build_async_db_url()
 
 engine = create_async_engine(
     ASYNC_DB_URL,

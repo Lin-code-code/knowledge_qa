@@ -21,9 +21,11 @@ class ReactAgent:
             middleware=[monitor_tool, log_before_model]
         )
 
-    async def aexecute(self, query: str, history: list) -> str:
-        messages = list(history)
-        messages.append({"role": "user", "content": query})
+    async def aexecute(self, query: str, context: str = "") -> str:
+        user_content = context.strip()
+        if not user_content:
+            user_content = query
+        messages = [{"role": "user", "content": user_content}]
 
         input_dict = {"messages": messages}
         response = await self.agent.ainvoke(input_dict)

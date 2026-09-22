@@ -90,3 +90,28 @@ def load_retrieval_prompt():
     except Exception as e:
         logger.error(f"[load_retrieval_prompt]解析检索 agent prompt 出错，{str(e)}")
         raise e
+
+
+def _load_prompt_config(key: str, label: str) -> str:
+    try:
+        path = get_abs_path(prompts_conf[key])
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    except KeyError as e:
+        logger.error(f"[{label}]在yaml配置中没有{key}配置项")
+        raise e
+    except Exception as e:
+        logger.error(f"[{label}]解析提示词出错，{str(e)}")
+        raise e
+
+
+def load_topic_router_prompt():
+    return _load_prompt_config("topic_router_prompt_path", "load_topic_router_prompt")
+
+
+def load_summary_prompt():
+    return _load_prompt_config("summary_prompt_path", "load_summary_prompt")
+
+
+def load_memory_prompt():
+    return _load_prompt_config("memory_prompt_path", "load_memory_prompt")
